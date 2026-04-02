@@ -1640,6 +1640,8 @@ dependencies = [
 [[package]]
 name = "tsp-ltv"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "072e18abb3fbc096b1c607cbb3eefffda07430f226c1a4cf8a9411185bc004d9"
 dependencies = [
  "base64",
  "chrono",

@@ -87,4 +87,4 @@ clap = { version = "4", features = ["derive"] }
 kryptering = { version = "0.1.0", default-features = false, features = ["legacy", "post-quantum", "pkcs11"] }
 
 # Shared trust/validation infrastructure
-tsp-ltv = { path = "/home/kdas/code/esigning/tsp-ltv", default-features = false }
+tsp-ltv = { version = "0.1.0", default-features = false }
