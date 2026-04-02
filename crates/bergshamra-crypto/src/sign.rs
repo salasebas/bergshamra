@@ -304,6 +304,25 @@ enum HashType {
     Ripemd160,
 }
 
+/// Map `HashType` to `kryptering::HashAlgorithm`.
+fn hash_to_kryptering(h: HashType) -> kryptering::HashAlgorithm {
+    match h {
+        HashType::Sha1 => kryptering::HashAlgorithm::Sha1,
+        HashType::Sha224 => kryptering::HashAlgorithm::Sha224,
+        HashType::Sha256 => kryptering::HashAlgorithm::Sha256,
+        HashType::Sha384 => kryptering::HashAlgorithm::Sha384,
+        HashType::Sha512 => kryptering::HashAlgorithm::Sha512,
+        HashType::Sha3_224 => kryptering::HashAlgorithm::Sha3_224,
+        HashType::Sha3_256 => kryptering::HashAlgorithm::Sha3_256,
+        HashType::Sha3_384 => kryptering::HashAlgorithm::Sha3_384,
+        HashType::Sha3_512 => kryptering::HashAlgorithm::Sha3_512,
+        #[cfg(feature = "legacy-algorithms")]
+        HashType::Md5 => kryptering::HashAlgorithm::Md5,
+        #[cfg(feature = "legacy-algorithms")]
+        HashType::Ripemd160 => kryptering::HashAlgorithm::Ripemd160,
+    }
+}
+
 // ── RSA PKCS#1 v1.5 ─────────────────────────────────────────────────
 
 struct RsaPkcs1v15 {
@@ -482,22 +501,7 @@ struct Ecdsa {
 
 /// Compute the digest of `data` using the given HashType.
 fn compute_hash(hash: HashType, data: &[u8]) -> Vec<u8> {
-    use digest::Digest;
-    match hash {
-        HashType::Sha1 => sha1::Sha1::digest(data).to_vec(),
-        HashType::Sha224 => sha2::Sha224::digest(data).to_vec(),
-        HashType::Sha256 => sha2::Sha256::digest(data).to_vec(),
-        HashType::Sha384 => sha2::Sha384::digest(data).to_vec(),
-        HashType::Sha512 => sha2::Sha512::digest(data).to_vec(),
-        HashType::Sha3_224 => sha3::Sha3_224::digest(data).to_vec(),
-        HashType::Sha3_256 => sha3::Sha3_256::digest(data).to_vec(),
-        HashType::Sha3_384 => sha3::Sha3_384::digest(data).to_vec(),
-        HashType::Sha3_512 => sha3::Sha3_512::digest(data).to_vec(),
-        #[cfg(feature = "legacy-algorithms")]
-        HashType::Md5 => md5::Md5::digest(data).to_vec(),
-        #[cfg(feature = "legacy-algorithms")]
-        HashType::Ripemd160 => ripemd::Ripemd160::digest(data).to_vec(),
-    }
+    kryptering::digest::digest(hash_to_kryptering(hash), data)
 }
 
 /// Normalize a raw r||s ECDSA signature where each component may be
@@ -865,50 +869,11 @@ impl SignatureAlgorithm for HmacSign {
 }
 
 fn compute_hmac(hash: HashType, key: &[u8], data: &[u8]) -> Vec<u8> {
-    use hmac::{Hmac, Mac};
-    macro_rules! hmac_compute {
-        ($hasher:ty) => {{
-            let mut mac = <Hmac<$hasher>>::new_from_slice(key).expect("HMAC key");
-            mac.update(data);
-            mac.finalize().into_bytes().to_vec()
-        }};
-    }
-    match hash {
-        HashType::Sha1 => hmac_compute!(sha1::Sha1),
-        HashType::Sha224 => hmac_compute!(sha2::Sha224),
-        HashType::Sha256 => hmac_compute!(sha2::Sha256),
-        HashType::Sha384 => hmac_compute!(sha2::Sha384),
-        HashType::Sha512 => hmac_compute!(sha2::Sha512),
-        HashType::Sha3_224 => hmac_compute!(sha3::Sha3_224),
-        HashType::Sha3_256 => hmac_compute!(sha3::Sha3_256),
-        HashType::Sha3_384 => hmac_compute!(sha3::Sha3_384),
-        HashType::Sha3_512 => hmac_compute!(sha3::Sha3_512),
-        #[cfg(feature = "legacy-algorithms")]
-        HashType::Md5 => hmac_compute!(md5::Md5),
-        #[cfg(feature = "legacy-algorithms")]
-        HashType::Ripemd160 => hmac_compute!(ripemd::Ripemd160),
-    }
+    kryptering::digest::compute_hmac(hash_to_kryptering(hash), key, data)
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if b.is_empty() || a.is_empty() {
-        return false;
-    }
-    if b.len() < a.len() {
-        // Truncated HMAC comparison
-        return a[..b.len()]
-            .iter()
-            .zip(b.iter())
-            .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-            == 0;
-    }
-    if a.len() != b.len() {
-        return false;
-    }
-    a.iter()
-        .zip(b.iter())
-        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-        == 0
+    kryptering::digest::constant_time_eq(a, b)
 }
 
 /// Return the hash output size in bits for an HMAC algorithm URI.

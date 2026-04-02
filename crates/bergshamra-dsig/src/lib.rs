@@ -118,3 +118,19 @@ pub mod verify;
 
 pub use context::DsigContext;
 pub use verify::{VerifiedKeyInfo, VerifiedReference, VerifyResult};
+
+/// Convert a [`kryptering::Error`] into a [`bergshamra_core::Error`].
+fn map_kryptering_err(e: kryptering::Error) -> bergshamra_core::Error {
+    match e {
+        kryptering::Error::Crypto(s) => bergshamra_core::Error::Crypto(s),
+        kryptering::Error::UnsupportedAlgorithm(s) => {
+            bergshamra_core::Error::UnsupportedAlgorithm(s)
+        }
+        kryptering::Error::Key(s) => bergshamra_core::Error::Key(s),
+        kryptering::Error::Io(e) => bergshamra_core::Error::Io(e),
+        // Handle additional error variants (e.g., Pkcs11) when the kryptering
+        // crate is compiled with optional features.
+        #[allow(unreachable_patterns)]
+        other => bergshamra_core::Error::Crypto(other.to_string()),
+    }
+}

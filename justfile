@@ -72,6 +72,18 @@ dsig-failures:
 enc-failures:
     @ls -t /tmp/xmlsec-testEnc.sh-openssl-*/failed.log 2>/dev/null | head -1 | xargs cat 2>/dev/null || echo "No Enc failed.log found. Run 'just test-enc' first."
 
+# HSM test setup (initializes SoftHSM2 token with RSA and EC keys)
+hsm-setup:
+    bash {{justfile_directory()}}/hsm-test/setup.sh
+
+# Run HSM integration tests (requires hsm-setup first)
+test-hsm: build
+    SOFTHSM2_CONF={{justfile_directory()}}/hsm-test/softhsm2.conf \
+        cargo test -p bergshamra-dsig --test hsm_sign_verify -- --ignored --nocapture --test-threads=1
+
+# Run all tests including HSM
+test-all-with-hsm: test-all test-hsm
+
 # Show summary of latest test runs
 summary:
     @echo "=== DSig ===" && grep 'TOTAL OK' /tmp/dsig-results.txt 2>/dev/null || echo "No DSig results. Run 'just test-dsig' first."

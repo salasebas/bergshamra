@@ -14,6 +14,7 @@ legacy-algorithms = ["dep:md-5", "dep:ripemd"]
 
 [dependencies]
 bergshamra-core.workspace = true
+kryptering.workspace = true
 digest.workspace = true
 sha1.workspace = true
 sha2.workspace = true

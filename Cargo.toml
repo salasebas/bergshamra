@@ -14,7 +14,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.3.1"
+version = "0.4.0"
 edition = "2021"
 license = "BSD-2-Clause"
 repository = "https://github.com/kushaldas/bergshamra"
@@ -23,15 +23,15 @@ rust-version = "1.75"
 
 [workspace.dependencies]
 # Internal crates
-bergshamra-core = { version = "0.3.1", path = "crates/bergshamra-core" }
-bergshamra-xml = { version = "0.3.1", path = "crates/bergshamra-xml" }
-bergshamra-c14n = { version = "0.3.1", path = "crates/bergshamra-c14n" }
-bergshamra-crypto = { version = "0.3.1", path = "crates/bergshamra-crypto" }
-bergshamra-keys = { version = "0.3.1", path = "crates/bergshamra-keys" }
-bergshamra-transforms = { version = "0.3.1", path = "crates/bergshamra-transforms" }
-bergshamra-dsig = { version = "0.3.1", path = "crates/bergshamra-dsig" }
-bergshamra-enc = { version = "0.3.1", path = "crates/bergshamra-enc" }
-bergshamra-pkcs12 = { version = "0.3.1", path = "crates/bergshamra-pkcs12" }
+bergshamra-core = { version = "0.4.0", path = "crates/bergshamra-core" }
+bergshamra-xml = { version = "0.4.0", path = "crates/bergshamra-xml" }
+bergshamra-c14n = { version = "0.4.0", path = "crates/bergshamra-c14n" }
+bergshamra-crypto = { version = "0.4.0", path = "crates/bergshamra-crypto" }
+bergshamra-keys = { version = "0.4.0", path = "crates/bergshamra-keys" }
+bergshamra-transforms = { version = "0.4.0", path = "crates/bergshamra-transforms" }
+bergshamra-dsig = { version = "0.4.0", path = "crates/bergshamra-dsig" }
+bergshamra-enc = { version = "0.4.0", path = "crates/bergshamra-enc" }
+bergshamra-pkcs12 = { version = "0.4.0", path = "crates/bergshamra-pkcs12" }
 
 # XML parsing
 uppsala = "0.3.0"
@@ -47,7 +47,7 @@ digest = "0.10"
 rsa = "0.9"
 ecdsa = "0.16"
 dsa = "0.6"
-ml-dsa = { version = "0.1.0-rc.7", features = ["pkcs8"] }
+ml-dsa = { version = "=0.1.0-rc.7", features = ["pkcs8"] }
 slh-dsa = "0.2.0-rc.4"
 pkcs8-pq = { package = "pkcs8", version = "=0.11.0-rc.11" }
 const-oid-pq = { package = "const-oid", version = "0.10.2", features = ["db"] }
@@ -82,3 +82,9 @@ num-traits = "0.2"
 base64 = "0.22"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
+
+# Shared crypto backend
+kryptering = { version = "0.1.0", default-features = false, features = ["legacy", "post-quantum", "pkcs11"] }
+
+# Shared trust/validation infrastructure
+tsp-ltv = { path = "/home/kdas/code/esigning/tsp-ltv", default-features = false }

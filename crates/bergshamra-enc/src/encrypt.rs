@@ -215,42 +215,60 @@ fn encrypt_session_key(
         // Encrypt the session key
         let encrypted_key_bytes = match enc_uri {
             algorithm::RSA_PKCS1 | algorithm::RSA_OAEP | algorithm::RSA_OAEP_ENC11 => {
-                let oaep_params = read_oaep_params(&doc, enc_method_id);
-                let transport =
-                    bergshamra_crypto::keytransport::from_uri_with_params(enc_uri, oaep_params)?;
-                // Look for KeyName in this EncryptedKey's KeyInfo to select the
-                // correct RSA key (important for multi-recipient encryption).
-                let rsa_key = resolve_encrypted_key_rsa(ctx, &doc, node_id)?;
-                let public_key = rsa_key
-                    .rsa_public_key()
-                    .ok_or_else(|| Error::Key("RSA public key required".into()))?;
-                transport.encrypt(public_key, session_key)?
+                if let Some(ref hsm_encryptor) = ctx.hsm_encryptor {
+                    // Use HSM for RSA key transport encryption
+                    hsm_encryptor
+                        .encrypt(session_key)
+                        .map_err(map_kryptering_err)?
+                } else {
+                    // Software path
+                    let oaep_params = read_oaep_params(&doc, enc_method_id);
+                    let transport =
+                        bergshamra_crypto::keytransport::from_uri_with_params(
+                            enc_uri, oaep_params,
+                        )?;
+                    // Look for KeyName in this EncryptedKey's KeyInfo to select the
+                    // correct RSA key (important for multi-recipient encryption).
+                    let rsa_key = resolve_encrypted_key_rsa(ctx, &doc, node_id)?;
+                    let public_key = rsa_key
+                        .rsa_public_key()
+                        .ok_or_else(|| Error::Key("RSA public key required".into()))?;
+                    transport.encrypt(public_key, session_key)?
+                }
             }
             algorithm::KW_AES128 | algorithm::KW_AES192 | algorithm::KW_AES256 => {
-                let kw = bergshamra_crypto::keywrap::from_uri(enc_uri)?;
-                let expected_kek_size = match enc_uri {
-                    algorithm::KW_AES128 => 16,
-                    algorithm::KW_AES192 => 24,
-                    algorithm::KW_AES256 => 32,
-                    _ => 0,
-                };
-                // Check for ECDH-ES key agreement (AgreementMethod in KeyInfo)
-                if let Some(kek) =
-                    resolve_agreement_method_encrypt(ctx, &doc, node_id, expected_kek_size)?
-                {
-                    // Fill in OriginatorKeyInfo's KeyValue with the originator's public key
-                    result = fill_originator_key_value(ctx, &doc, node_id, &result)?;
-                    kw.wrap(&kek, session_key)?
+                if let Some(ref hsm_wrapper) = ctx.hsm_key_wrapper {
+                    // Use HSM for AES key wrapping
+                    hsm_wrapper
+                        .wrap(session_key)
+                        .map_err(map_kryptering_err)?
                 } else {
-                    let aes_key = ctx
-                        .keys_manager
-                        .find_aes_by_size(expected_kek_size)
-                        .or_else(|| ctx.keys_manager.find_aes())
-                        .ok_or_else(|| Error::Key("no AES key for key wrap".into()))?;
-                    let kek_bytes = aes_key
-                        .symmetric_key_bytes()
-                        .ok_or_else(|| Error::Key("AES key has no bytes".into()))?;
-                    kw.wrap(kek_bytes, session_key)?
+                    // Software path
+                    let kw = bergshamra_crypto::keywrap::from_uri(enc_uri)?;
+                    let expected_kek_size = match enc_uri {
+                        algorithm::KW_AES128 => 16,
+                        algorithm::KW_AES192 => 24,
+                        algorithm::KW_AES256 => 32,
+                        _ => 0,
+                    };
+                    // Check for ECDH-ES key agreement (AgreementMethod in KeyInfo)
+                    if let Some(kek) =
+                        resolve_agreement_method_encrypt(ctx, &doc, node_id, expected_kek_size)?
+                    {
+                        // Fill in OriginatorKeyInfo's KeyValue with the originator's public key
+                        result = fill_originator_key_value(ctx, &doc, node_id, &result)?;
+                        kw.wrap(&kek, session_key)?
+                    } else {
+                        let aes_key = ctx
+                            .keys_manager
+                            .find_aes_by_size(expected_kek_size)
+                            .or_else(|| ctx.keys_manager.find_aes())
+                            .ok_or_else(|| Error::Key("no AES key for key wrap".into()))?;
+                        let kek_bytes = aes_key
+                            .symmetric_key_bytes()
+                            .ok_or_else(|| Error::Key("AES key has no bytes".into()))?;
+                        kw.wrap(kek_bytes, session_key)?
+                    }
                 }
             }
             algorithm::KW_TRIPLEDES => {
@@ -749,4 +767,15 @@ fn find_child_element(
         }
     }
     None
+}
+
+/// Convert a `kryptering::Error` to a `bergshamra_core::Error`.
+fn map_kryptering_err(e: kryptering::Error) -> Error {
+    match e {
+        kryptering::Error::Crypto(s) => Error::Crypto(s),
+        kryptering::Error::UnsupportedAlgorithm(s) => Error::UnsupportedAlgorithm(s),
+        kryptering::Error::Key(s) => Error::Key(s),
+        kryptering::Error::Io(e) => Error::Io(e),
+        kryptering::Error::Pkcs11(s) => Error::Crypto(format!("PKCS#11: {s}")),
+    }
 }

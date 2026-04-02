@@ -17,6 +17,7 @@ bergshamra-c14n.workspace = true
 bergshamra-crypto.workspace = true
 base64.workspace = true
 uppsala.workspace = true
+kryptering.workspace = true
 rand.workspace = true
 p256.workspace = true
 p384.workspace = true

@@ -3,7 +3,7 @@
 //! Digest (hash) algorithm implementations.
 
 use bergshamra_core::{algorithm, Error};
-use digest::Digest;
+use kryptering::HashAlgorithm;
 
 /// Trait for digest algorithms.
 pub trait DigestAlgorithm: Send {
@@ -15,82 +15,86 @@ pub trait DigestAlgorithm: Send {
     fn uri(&self) -> &'static str;
 }
 
-/// Create a digest algorithm from its URI.
-pub fn from_uri(uri: &str) -> Result<Box<dyn DigestAlgorithm>, Error> {
+/// Map an XML algorithm URI to a `kryptering::HashAlgorithm`.
+fn uri_to_hash(uri: &str) -> Result<HashAlgorithm, Error> {
     match uri {
-        algorithm::SHA1 => Ok(Box::new(Sha1Digest::new())),
-        algorithm::SHA224 => Ok(Box::new(Sha224Digest::new())),
-        algorithm::SHA256 => Ok(Box::new(Sha256Digest::new())),
-        algorithm::SHA384 => Ok(Box::new(Sha384Digest::new())),
-        algorithm::SHA512 => Ok(Box::new(Sha512Digest::new())),
-        algorithm::SHA3_224 => Ok(Box::new(Sha3_224Digest::new())),
-        algorithm::SHA3_256 => Ok(Box::new(Sha3_256Digest::new())),
-        algorithm::SHA3_384 => Ok(Box::new(Sha3_384Digest::new())),
-        algorithm::SHA3_512 => Ok(Box::new(Sha3_512Digest::new())),
+        algorithm::SHA1 => Ok(HashAlgorithm::Sha1),
+        algorithm::SHA224 => Ok(HashAlgorithm::Sha224),
+        algorithm::SHA256 => Ok(HashAlgorithm::Sha256),
+        algorithm::SHA384 => Ok(HashAlgorithm::Sha384),
+        algorithm::SHA512 => Ok(HashAlgorithm::Sha512),
+        algorithm::SHA3_224 => Ok(HashAlgorithm::Sha3_224),
+        algorithm::SHA3_256 => Ok(HashAlgorithm::Sha3_256),
+        algorithm::SHA3_384 => Ok(HashAlgorithm::Sha3_384),
+        algorithm::SHA3_512 => Ok(HashAlgorithm::Sha3_512),
         #[cfg(feature = "legacy-algorithms")]
-        algorithm::MD5 => Ok(Box::new(Md5Digest::new())),
+        algorithm::MD5 => Ok(HashAlgorithm::Md5),
         #[cfg(feature = "legacy-algorithms")]
-        algorithm::RIPEMD160 => Ok(Box::new(Ripemd160Digest::new())),
+        algorithm::RIPEMD160 => Ok(HashAlgorithm::Ripemd160),
         _ => Err(Error::UnsupportedAlgorithm(format!(
             "digest algorithm: {uri}"
         ))),
     }
 }
 
+/// Map a `kryptering::HashAlgorithm` back to an XML algorithm URI.
+fn hash_to_uri(algo: HashAlgorithm) -> &'static str {
+    match algo {
+        HashAlgorithm::Sha1 => algorithm::SHA1,
+        HashAlgorithm::Sha224 => algorithm::SHA224,
+        HashAlgorithm::Sha256 => algorithm::SHA256,
+        HashAlgorithm::Sha384 => algorithm::SHA384,
+        HashAlgorithm::Sha512 => algorithm::SHA512,
+        HashAlgorithm::Sha3_224 => algorithm::SHA3_224,
+        HashAlgorithm::Sha3_256 => algorithm::SHA3_256,
+        HashAlgorithm::Sha3_384 => algorithm::SHA3_384,
+        HashAlgorithm::Sha3_512 => algorithm::SHA3_512,
+        #[cfg(feature = "legacy-algorithms")]
+        HashAlgorithm::Md5 => algorithm::MD5,
+        #[cfg(feature = "legacy-algorithms")]
+        HashAlgorithm::Ripemd160 => algorithm::RIPEMD160,
+        // Catch variants enabled by kryptering features not matched above.
+        #[allow(unreachable_patterns)]
+        _ => "unsupported",
+    }
+}
+
+/// Create a digest algorithm from its URI.
+pub fn from_uri(uri: &str) -> Result<Box<dyn DigestAlgorithm>, Error> {
+    let algo = uri_to_hash(uri)?;
+    let inner = kryptering::digest::new_digest(algo).map_err(crate::map_kryptering_err)?;
+    Ok(Box::new(KrypteringDigest {
+        uri: hash_to_uri(algo),
+        inner,
+    }))
+}
+
 /// Compute a digest in one shot.
 pub fn digest(uri: &str, data: &[u8]) -> Result<Vec<u8>, Error> {
-    let mut hasher = from_uri(uri)?;
-    hasher.update(data);
-    Ok(hasher.finalize())
+    let algo = uri_to_hash(uri)?;
+    Ok(kryptering::digest::digest(algo, data))
 }
 
-// ── Concrete implementations ─────────────────────────────────────────
+// ── Wrapper that delegates to kryptering ────────────────────────────
 
-macro_rules! impl_digest {
-    ($name:ident, $hasher:ty, $uri:expr) => {
-        struct $name {
-            inner: $hasher,
-        }
-
-        impl $name {
-            fn new() -> Self {
-                Self {
-                    inner: <$hasher>::new(),
-                }
-            }
-        }
-
-        impl DigestAlgorithm for $name {
-            fn update(&mut self, data: &[u8]) {
-                Digest::update(&mut self.inner, data);
-            }
-
-            fn finalize(self: Box<Self>) -> Vec<u8> {
-                Digest::finalize(self.inner).to_vec()
-            }
-
-            fn uri(&self) -> &'static str {
-                $uri
-            }
-        }
-    };
+struct KrypteringDigest {
+    uri: &'static str,
+    inner: Box<dyn kryptering::digest::DigestStream>,
 }
 
-impl_digest!(Sha1Digest, sha1::Sha1, algorithm::SHA1);
-impl_digest!(Sha224Digest, sha2::Sha224, algorithm::SHA224);
-impl_digest!(Sha256Digest, sha2::Sha256, algorithm::SHA256);
-impl_digest!(Sha384Digest, sha2::Sha384, algorithm::SHA384);
-impl_digest!(Sha512Digest, sha2::Sha512, algorithm::SHA512);
-impl_digest!(Sha3_224Digest, sha3::Sha3_224, algorithm::SHA3_224);
-impl_digest!(Sha3_256Digest, sha3::Sha3_256, algorithm::SHA3_256);
-impl_digest!(Sha3_384Digest, sha3::Sha3_384, algorithm::SHA3_384);
-impl_digest!(Sha3_512Digest, sha3::Sha3_512, algorithm::SHA3_512);
+impl DigestAlgorithm for KrypteringDigest {
+    fn update(&mut self, data: &[u8]) {
+        self.inner.update(data);
+    }
 
-#[cfg(feature = "legacy-algorithms")]
-impl_digest!(Md5Digest, md5::Md5, algorithm::MD5);
+    fn finalize(self: Box<Self>) -> Vec<u8> {
+        self.inner.finalize()
+    }
 
-#[cfg(feature = "legacy-algorithms")]
-impl_digest!(Ripemd160Digest, ripemd::Ripemd160, algorithm::RIPEMD160);
+    fn uri(&self) -> &'static str {
+        self.uri
+    }
+}
 
 #[cfg(test)]
 mod tests {

@@ -214,79 +214,93 @@ pub fn sign(ctx: &DsigContext, template_xml: &str) -> Result<String, Error> {
     )?;
 
     // Sign
-    let key = ctx.keys_manager.first_key()?;
-    let signing_key = key
-        .to_signing_key()
-        .ok_or_else(|| Error::Key("no signing key".into()))?;
+    let signature = if let Some(ref hsm_signer) = ctx.hsm_signer {
+        // HSM signer path — key material stays on the HSM.
+        // The HSM signer already knows its algorithm, so we skip PQ context
+        // extraction and software key lookup.
+        hsm_signer
+            .sign(&c14n_signed_info)
+            .map_err(crate::map_kryptering_err)?
+    } else {
+        // Software key path (existing behaviour)
+        let key_ref = ctx.keys_manager.first_key()?;
+        let signing_key = key_ref
+            .to_signing_key()
+            .ok_or_else(|| Error::Key("no signing key".into()))?;
 
-    // Re-find sig_method in the updated doc for PQ context / HMAC length extraction
-    let updated_sig_method = find_child_element(
-        &updated_doc,
-        updated_signed_info,
-        ns::DSIG,
-        ns::node::SIGNATURE_METHOD,
-    )
-    .ok_or_else(|| Error::MissingElement("SignatureMethod".into()))?;
-
-    // Extract PQ context string for ML-DSA/SLH-DSA signing
-    let pq_context: Option<Vec<u8>> = if bergshamra_crypto::sign::is_pq_algorithm(sig_method_uri) {
-        let ctx_node = find_child_element(
+        // Re-find sig_method in the updated doc for PQ context / HMAC length extraction
+        let updated_sig_method = find_child_element(
             &updated_doc,
-            updated_sig_method,
-            ns::XMLSEC_PQ,
-            ns::node::MLDSA_CONTEXT_STRING,
+            updated_signed_info,
+            ns::DSIG,
+            ns::node::SIGNATURE_METHOD,
         )
-        .or_else(|| {
-            find_child_element(
+        .ok_or_else(|| Error::MissingElement("SignatureMethod".into()))?;
+
+        // Extract PQ context string for ML-DSA/SLH-DSA signing
+        let pq_context: Option<Vec<u8>> =
+            if bergshamra_crypto::sign::is_pq_algorithm(sig_method_uri) {
+                let ctx_node = find_child_element(
+                    &updated_doc,
+                    updated_sig_method,
+                    ns::XMLSEC_PQ,
+                    ns::node::MLDSA_CONTEXT_STRING,
+                )
+                .or_else(|| {
+                    find_child_element(
+                        &updated_doc,
+                        updated_sig_method,
+                        ns::XMLSEC_PQ,
+                        ns::node::SLHDSA_CONTEXT_STRING,
+                    )
+                });
+                if let Some(cn) = ctx_node {
+                    let b64_text = updated_doc.text_content_deep(cn);
+                    let b64 = b64_text.trim();
+                    if b64.is_empty() {
+                        None
+                    } else {
+                        use base64::Engine as _;
+                        let engine = base64::engine::general_purpose::STANDARD;
+                        let decoded = engine
+                            .decode(b64)
+                            .map_err(|e| Error::Base64(format!("PQ context string: {e}")))?;
+                        Some(decoded)
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+        let sig_alg =
+            bergshamra_crypto::sign::from_uri_with_context(sig_method_uri, pq_context)?;
+        let mut sig = sig_alg.sign(&signing_key, &c14n_signed_info)?;
+
+        // Truncate HMAC output if HMACOutputLength is specified
+        if bergshamra_crypto::sign::is_hmac_algorithm(sig_method_uri) {
+            if let Some(hmac_len_id) = find_child_element(
                 &updated_doc,
                 updated_sig_method,
-                ns::XMLSEC_PQ,
-                ns::node::SLHDSA_CONTEXT_STRING,
-            )
-        });
-        if let Some(cn) = ctx_node {
-            let b64_text = updated_doc.text_content_deep(cn);
-            let b64 = b64_text.trim();
-            if b64.is_empty() {
-                None
-            } else {
-                use base64::Engine as _;
-                let engine = base64::engine::general_purpose::STANDARD;
-                let decoded = engine
-                    .decode(b64)
-                    .map_err(|e| Error::Base64(format!("PQ context string: {e}")))?;
-                Some(decoded)
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    let sig_alg = bergshamra_crypto::sign::from_uri_with_context(sig_method_uri, pq_context)?;
-    let mut signature = sig_alg.sign(&signing_key, &c14n_signed_info)?;
-
-    // Truncate HMAC output if HMACOutputLength is specified
-    if bergshamra_crypto::sign::is_hmac_algorithm(sig_method_uri) {
-        if let Some(hmac_len_id) = find_child_element(
-            &updated_doc,
-            updated_sig_method,
-            ns::DSIG,
-            ns::node::HMAC_OUTPUT_LENGTH,
-        ) {
-            let len_text_owned = updated_doc.text_content_deep(hmac_len_id);
-            let len_text = len_text_owned.trim();
-            if let Ok(bits) = len_text.parse::<usize>() {
-                if bits % 8 == 0 {
-                    let bytes = bits / 8;
-                    if bytes < signature.len() {
-                        signature.truncate(bytes);
+                ns::DSIG,
+                ns::node::HMAC_OUTPUT_LENGTH,
+            ) {
+                let len_text_owned = updated_doc.text_content_deep(hmac_len_id);
+                let len_text = len_text_owned.trim();
+                if let Ok(bits) = len_text.parse::<usize>() {
+                    if bits % 8 == 0 {
+                        let bytes = bits / 8;
+                        if bytes < sig.len() {
+                            sig.truncate(bytes);
+                        }
                     }
                 }
             }
         }
-    }
+
+        sig
+    };
 
     use base64::Engine;
     let engine = base64::engine::general_purpose::STANDARD;
@@ -295,19 +309,25 @@ pub fn sign(ctx: &DsigContext, template_xml: &str) -> Result<String, Error> {
     // Replace empty SignatureValue
     result_xml = replace_first_empty_element(&result_xml, "SignatureValue", &sig_b64);
 
-    // Populate empty X509Data with certificate(s) from the signing key
-    if !key.x509_chain.is_empty() {
-        result_xml = populate_x509_data(&result_xml, &key.x509_chain)?;
+    // Populate KeyInfo elements from the software key (skipped for HSM signers
+    // because the key material lives on the HSM and is not available here).
+    if ctx.hsm_signer.is_none() {
+        let key = ctx.keys_manager.first_key()?;
+
+        // Populate empty X509Data with certificate(s) from the signing key
+        if !key.x509_chain.is_empty() {
+            result_xml = populate_x509_data(&result_xml, &key.x509_chain)?;
+        }
+
+        // Populate empty KeyValue with the public key
+        result_xml = populate_key_value(&result_xml, &key.data)?;
+
+        // Populate empty DEREncodedKeyValue with SPKI DER
+        result_xml = populate_der_encoded_key_value(&result_xml, &key.data)?;
+
+        // Encrypt session key into EncryptedKey elements with empty CipherValue
+        result_xml = encrypt_session_key_in_template(&result_xml, key, &ctx.keys_manager)?;
     }
-
-    // Populate empty KeyValue with the public key
-    result_xml = populate_key_value(&result_xml, &key.data)?;
-
-    // Populate empty DEREncodedKeyValue with SPKI DER
-    result_xml = populate_der_encoded_key_value(&result_xml, &key.data)?;
-
-    // Encrypt session key into EncryptedKey elements with empty CipherValue
-    result_xml = encrypt_session_key_in_template(&result_xml, key, &ctx.keys_manager)?;
 
     Ok(result_xml)
 }

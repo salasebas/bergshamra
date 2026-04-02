@@ -209,6 +209,75 @@ pub fn verify(ctx: &DsigContext, xml: &str) -> Result<VerifyResult, Error> {
         }
     }
 
+    // 5. Canonicalize <SignedInfo>
+    // We need to canonicalize the SignedInfo element as a document subset
+    let signed_info_ns = NodeSet::tree_without_comments(signed_info, &doc);
+    let c14n_signed_info = bergshamra_c14n::canonicalize_doc(
+        &doc,
+        c14n_mode,
+        Some(&signed_info_ns),
+        &inclusive_prefixes,
+    )?;
+
+    if ctx.debug {
+        eprintln!("== PreSigned data - start buffer:");
+        eprint!("{}", String::from_utf8_lossy(&c14n_signed_info));
+        eprintln!("\n== PreSigned data - end buffer");
+    }
+
+    // 6. Verify SignatureValue
+    let sig_value_node = find_child_element(&doc, sig_node, ns::DSIG, ns::node::SIGNATURE_VALUE)
+        .ok_or_else(|| Error::MissingElement("SignatureValue".into()))?;
+    let sig_value_b64 = element_text(&doc, sig_value_node).unwrap_or("").trim();
+    let sig_value_clean: String = sig_value_b64
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+
+    use base64::Engine;
+    let engine = base64::engine::general_purpose::STANDARD;
+    let sig_value = engine
+        .decode(&sig_value_clean)
+        .map_err(|e| Error::Base64(format!("SignatureValue: {e}")))?;
+
+    // Validate HMAC truncation length against decoded signature
+    if let Some(bits) = hmac_output_length_bits {
+        let expected_bytes = bits / 8;
+        if sig_value.len() != expected_bytes {
+            return Ok(VerifyResult::Invalid {
+                reason: format!(
+                    "SignatureValue length {} bytes does not match HMACOutputLength {} bits ({} bytes)",
+                    sig_value.len(), bits, expected_bytes
+                ),
+            });
+        }
+    }
+
+    // HSM verifier path — key material stays on the HSM.
+    if let Some(ref hsm_verifier) = ctx.hsm_verifier {
+        let valid = hsm_verifier
+            .verify(&c14n_signed_info, &sig_value)
+            .map_err(crate::map_kryptering_err)?;
+
+        return if valid {
+            Ok(VerifyResult::Valid {
+                signature_node: sig_node,
+                references: verified_refs,
+                key_info: VerifiedKeyInfo {
+                    algorithm: format!("{:?}", hsm_verifier.algorithm()),
+                    key_name: None,
+                    x509_chain: Vec::new(),
+                },
+            })
+        } else {
+            Ok(VerifyResult::Invalid {
+                reason: "signature value verification failed (HSM)".into(),
+            })
+        };
+    }
+
+    // Software key path — resolve key from KeyInfo / KeysManager.
+
     // 4. Resolve signing key
     // When trusted_keys_only is set, skip inline key extraction and only use
     // keys from the KeysManager. This is the secure mode for SAML: we only
@@ -321,50 +390,6 @@ pub fn verify(ctx: &DsigContext, xml: &str) -> Result<VerifyResult, Error> {
         } else if ctx.enabled_key_data_x509 && !key_from_x509 && !key_from_manager {
             // enabled-key-data x509 was requested but no X509 data found
             // This is not an error by itself — the test framework handles this
-        }
-    }
-
-    // 5. Canonicalize <SignedInfo>
-    // We need to canonicalize the SignedInfo element as a document subset
-    let signed_info_ns = NodeSet::tree_without_comments(signed_info, &doc);
-    let c14n_signed_info = bergshamra_c14n::canonicalize_doc(
-        &doc,
-        c14n_mode,
-        Some(&signed_info_ns),
-        &inclusive_prefixes,
-    )?;
-
-    if ctx.debug {
-        eprintln!("== PreSigned data - start buffer:");
-        eprint!("{}", String::from_utf8_lossy(&c14n_signed_info));
-        eprintln!("\n== PreSigned data - end buffer");
-    }
-
-    // 6. Verify SignatureValue
-    let sig_value_node = find_child_element(&doc, sig_node, ns::DSIG, ns::node::SIGNATURE_VALUE)
-        .ok_or_else(|| Error::MissingElement("SignatureValue".into()))?;
-    let sig_value_b64 = element_text(&doc, sig_value_node).unwrap_or("").trim();
-    let sig_value_clean: String = sig_value_b64
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect();
-
-    use base64::Engine;
-    let engine = base64::engine::general_purpose::STANDARD;
-    let sig_value = engine
-        .decode(&sig_value_clean)
-        .map_err(|e| Error::Base64(format!("SignatureValue: {e}")))?;
-
-    // Validate HMAC truncation length against decoded signature
-    if let Some(bits) = hmac_output_length_bits {
-        let expected_bytes = bits / 8;
-        if sig_value.len() != expected_bytes {
-            return Ok(VerifyResult::Invalid {
-                reason: format!(
-                    "SignatureValue length {} bytes does not match HMACOutputLength {} bits ({} bytes)",
-                    sig_value.len(), bits, expected_bytes
-                ),
-            });
         }
     }
 

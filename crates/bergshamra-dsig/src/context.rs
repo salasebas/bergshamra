@@ -3,9 +3,9 @@
 //! DSig context — holds keys and configuration for signature operations.
 
 use bergshamra_keys::KeysManager;
+use kryptering::traits::{Signer, Verifier};
 
 /// Context for XML-DSig operations.
-#[derive(Debug)]
 pub struct DsigContext {
     /// Keys manager for key lookup.
     pub keys_manager: KeysManager,
@@ -39,6 +39,32 @@ pub struct DsigContext {
     /// XML Signature Wrapping (XSW) attacks where signed content is moved to an
     /// unexpected position in the document.
     pub strict_verification: bool,
+    /// Optional HSM-backed signer. When set, bypasses KeysManager for signing.
+    pub hsm_signer: Option<Box<dyn Signer>>,
+    /// Optional HSM-backed verifier. When set, bypasses KeysManager for verification.
+    pub hsm_verifier: Option<Box<dyn Verifier>>,
+}
+
+impl std::fmt::Debug for DsigContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DsigContext")
+            .field("keys_manager", &self.keys_manager)
+            .field("id_attrs", &self.id_attrs)
+            .field("url_maps", &self.url_maps)
+            .field("hmac_min_out_len", &self.hmac_min_out_len)
+            .field("debug", &self.debug)
+            .field("base_dir", &self.base_dir)
+            .field("insecure", &self.insecure)
+            .field("verify_keys", &self.verify_keys)
+            .field("verification_time", &self.verification_time)
+            .field("skip_time_checks", &self.skip_time_checks)
+            .field("enabled_key_data_x509", &self.enabled_key_data_x509)
+            .field("trusted_keys_only", &self.trusted_keys_only)
+            .field("strict_verification", &self.strict_verification)
+            .field("hsm_signer", &self.hsm_signer.as_ref().map(|_| "<hsm_signer>"))
+            .field("hsm_verifier", &self.hsm_verifier.as_ref().map(|_| "<hsm_verifier>"))
+            .finish()
+    }
 }
 
 impl DsigContext {
@@ -58,6 +84,8 @@ impl DsigContext {
             enabled_key_data_x509: false,
             trusted_keys_only: false,
             strict_verification: false,
+            hsm_signer: None,
+            hsm_verifier: None,
         }
     }
 
@@ -128,6 +156,25 @@ impl DsigContext {
     /// Set base directory for resolving relative URIs (builder style).
     pub fn with_base_dir(mut self, dir: impl Into<String>) -> Self {
         self.base_dir = Some(dir.into());
+        self
+    }
+
+    /// Set an HSM-backed signer (builder style).
+    ///
+    /// When set, signing operations bypass the `KeysManager` and delegate
+    /// to the provided [`kryptering::Signer`] implementation. Key material
+    /// never leaves the HSM.
+    pub fn with_hsm_signer(mut self, signer: Box<dyn kryptering::Signer>) -> Self {
+        self.hsm_signer = Some(signer);
+        self
+    }
+
+    /// Set an HSM-backed verifier (builder style).
+    ///
+    /// When set, signature verification bypasses the `KeysManager` and
+    /// delegates to the provided [`kryptering::Verifier`] implementation.
+    pub fn with_hsm_verifier(mut self, verifier: Box<dyn kryptering::Verifier>) -> Self {
+        self.hsm_verifier = Some(verifier);
         self
     }
 }
