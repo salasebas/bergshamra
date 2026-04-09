@@ -35,7 +35,10 @@ impl std::fmt::Debug for EncContext {
             )
             .field(
                 "hsm_key_unwrapper",
-                &self.hsm_key_unwrapper.as_ref().map(|_| "<hsm_key_unwrapper>"),
+                &self
+                    .hsm_key_unwrapper
+                    .as_ref()
+                    .map(|_| "<hsm_key_unwrapper>"),
             )
             .field(
                 "hsm_encryptor",

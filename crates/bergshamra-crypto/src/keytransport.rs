@@ -138,13 +138,8 @@ impl KeyTransportAlgorithm for KrypteringKeyTransport {
     }
 
     fn encrypt(&self, public_key: &rsa::RsaPublicKey, key_data: &[u8]) -> Result<Vec<u8>, Error> {
-        kryptering::keytransport::kt_encrypt(
-            self.algo,
-            public_key,
-            key_data,
-            self.label.as_deref(),
-        )
-        .map_err(crate::map_kryptering_err)
+        kryptering::keytransport::kt_encrypt(self.algo, public_key, key_data, self.label.as_deref())
+            .map_err(crate::map_kryptering_err)
     }
 
     fn decrypt(

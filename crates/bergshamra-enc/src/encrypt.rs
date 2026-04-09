@@ -223,10 +223,10 @@ fn encrypt_session_key(
                 } else {
                     // Software path
                     let oaep_params = read_oaep_params(&doc, enc_method_id);
-                    let transport =
-                        bergshamra_crypto::keytransport::from_uri_with_params(
-                            enc_uri, oaep_params,
-                        )?;
+                    let transport = bergshamra_crypto::keytransport::from_uri_with_params(
+                        enc_uri,
+                        oaep_params,
+                    )?;
                     // Look for KeyName in this EncryptedKey's KeyInfo to select the
                     // correct RSA key (important for multi-recipient encryption).
                     let rsa_key = resolve_encrypted_key_rsa(ctx, &doc, node_id)?;
@@ -239,9 +239,7 @@ fn encrypt_session_key(
             algorithm::KW_AES128 | algorithm::KW_AES192 | algorithm::KW_AES256 => {
                 if let Some(ref hsm_wrapper) = ctx.hsm_key_wrapper {
                     // Use HSM for AES key wrapping
-                    hsm_wrapper
-                        .wrap(session_key)
-                        .map_err(map_kryptering_err)?
+                    hsm_wrapper.wrap(session_key).map_err(map_kryptering_err)?
                 } else {
                     // Software path
                     let kw = bergshamra_crypto::keywrap::from_uri(enc_uri)?;

@@ -274,8 +274,7 @@ pub fn sign(ctx: &DsigContext, template_xml: &str) -> Result<String, Error> {
                 None
             };
 
-        let sig_alg =
-            bergshamra_crypto::sign::from_uri_with_context(sig_method_uri, pq_context)?;
+        let sig_alg = bergshamra_crypto::sign::from_uri_with_context(sig_method_uri, pq_context)?;
         let mut sig = sig_alg.sign(&signing_key, &c14n_signed_info)?;
 
         // Truncate HMAC output if HMACOutputLength is specified

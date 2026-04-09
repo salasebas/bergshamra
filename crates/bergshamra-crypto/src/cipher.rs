@@ -16,12 +16,30 @@ pub trait CipherAlgorithm: Send {
 /// Map an XML algorithm URI to a `kryptering::CipherAlgorithm`.
 fn uri_to_cipher(uri: &str) -> Result<(KCipherAlgorithm, &'static str), Error> {
     match uri {
-        algorithm::AES128_CBC => Ok((KCipherAlgorithm::AesCbc(AesKeySize::Aes128), algorithm::AES128_CBC)),
-        algorithm::AES192_CBC => Ok((KCipherAlgorithm::AesCbc(AesKeySize::Aes192), algorithm::AES192_CBC)),
-        algorithm::AES256_CBC => Ok((KCipherAlgorithm::AesCbc(AesKeySize::Aes256), algorithm::AES256_CBC)),
-        algorithm::AES128_GCM => Ok((KCipherAlgorithm::AesGcm(AesKeySize::Aes128), algorithm::AES128_GCM)),
-        algorithm::AES192_GCM => Ok((KCipherAlgorithm::AesGcm(AesKeySize::Aes192), algorithm::AES192_GCM)),
-        algorithm::AES256_GCM => Ok((KCipherAlgorithm::AesGcm(AesKeySize::Aes256), algorithm::AES256_GCM)),
+        algorithm::AES128_CBC => Ok((
+            KCipherAlgorithm::AesCbc(AesKeySize::Aes128),
+            algorithm::AES128_CBC,
+        )),
+        algorithm::AES192_CBC => Ok((
+            KCipherAlgorithm::AesCbc(AesKeySize::Aes192),
+            algorithm::AES192_CBC,
+        )),
+        algorithm::AES256_CBC => Ok((
+            KCipherAlgorithm::AesCbc(AesKeySize::Aes256),
+            algorithm::AES256_CBC,
+        )),
+        algorithm::AES128_GCM => Ok((
+            KCipherAlgorithm::AesGcm(AesKeySize::Aes128),
+            algorithm::AES128_GCM,
+        )),
+        algorithm::AES192_GCM => Ok((
+            KCipherAlgorithm::AesGcm(AesKeySize::Aes192),
+            algorithm::AES192_GCM,
+        )),
+        algorithm::AES256_GCM => Ok((
+            KCipherAlgorithm::AesGcm(AesKeySize::Aes256),
+            algorithm::AES256_GCM,
+        )),
         algorithm::TRIPLEDES_CBC => Ok((KCipherAlgorithm::TripleDesCbc, algorithm::TRIPLEDES_CBC)),
         _ => Err(Error::UnsupportedAlgorithm(format!("cipher: {uri}"))),
     }

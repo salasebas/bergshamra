@@ -26,6 +26,13 @@ pub struct VerifiedReference {
     pub uri: String,
     /// The resolved target node (if a same-document reference).
     pub resolved_node: Option<NodeId>,
+    /// Whether the digest was actually computed and verified.
+    ///
+    /// This is `false` for `cid:` URI references (WS-Security MIME attachments),
+    /// which are skipped because the referenced content is outside the XML document.
+    /// Callers that process `cid:` references **must** verify attachment digests
+    /// separately.
+    pub digest_verified: bool,
 }
 
 /// Information about the key that was used to verify the signature.
@@ -447,6 +454,7 @@ fn verify_reference(
             VerifiedReference {
                 uri: uri.to_owned(),
                 resolved_node: None,
+                digest_verified: false,
             },
         ));
     }
@@ -493,6 +501,7 @@ fn verify_reference(
     let vref = VerifiedReference {
         uri: uri.to_owned(),
         resolved_node,
+        digest_verified: true,
     };
 
     if let Some(transforms) = transforms_node {

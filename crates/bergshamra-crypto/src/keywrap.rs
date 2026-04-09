@@ -16,9 +16,18 @@ pub trait KeyWrapAlgorithm: Send {
 /// Map an XML algorithm URI to a `kryptering::KeyWrapAlgorithm`.
 fn uri_to_keywrap(uri: &str) -> Result<(KKeyWrapAlgorithm, &'static str), Error> {
     match uri {
-        algorithm::KW_AES128 => Ok((KKeyWrapAlgorithm::AesKw(AesKeySize::Aes128), algorithm::KW_AES128)),
-        algorithm::KW_AES192 => Ok((KKeyWrapAlgorithm::AesKw(AesKeySize::Aes192), algorithm::KW_AES192)),
-        algorithm::KW_AES256 => Ok((KKeyWrapAlgorithm::AesKw(AesKeySize::Aes256), algorithm::KW_AES256)),
+        algorithm::KW_AES128 => Ok((
+            KKeyWrapAlgorithm::AesKw(AesKeySize::Aes128),
+            algorithm::KW_AES128,
+        )),
+        algorithm::KW_AES192 => Ok((
+            KKeyWrapAlgorithm::AesKw(AesKeySize::Aes192),
+            algorithm::KW_AES192,
+        )),
+        algorithm::KW_AES256 => Ok((
+            KKeyWrapAlgorithm::AesKw(AesKeySize::Aes256),
+            algorithm::KW_AES256,
+        )),
         algorithm::KW_TRIPLEDES => Ok((KKeyWrapAlgorithm::TripleDesKw, algorithm::KW_TRIPLEDES)),
         _ => Err(Error::UnsupportedAlgorithm(format!("key wrap: {uri}"))),
     }

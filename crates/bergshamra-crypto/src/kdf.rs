@@ -82,9 +82,8 @@ pub fn concat_kdf(
     params: &ConcatKdfParams,
 ) -> Result<Vec<u8>, Error> {
     let digest_uri = params.digest_uri.as_deref().unwrap_or(algorithm::SHA256);
-    let hash = digest_uri_to_hash(digest_uri).map_err(|_| {
-        Error::UnsupportedAlgorithm(format!("ConcatKDF digest: {digest_uri}"))
-    })?;
+    let hash = digest_uri_to_hash(digest_uri)
+        .map_err(|_| Error::UnsupportedAlgorithm(format!("ConcatKDF digest: {digest_uri}")))?;
 
     let k_params = kryptering::kdf::ConcatKdfParams {
         hash,
@@ -99,9 +98,8 @@ pub fn concat_kdf(
 
 /// Derive a key using PBKDF2 (RFC 8018).
 pub fn pbkdf2_derive(password: &[u8], params: &Pbkdf2Params) -> Result<Vec<u8>, Error> {
-    let hash = prf_uri_to_hash(&params.prf_uri).map_err(|_| {
-        Error::UnsupportedAlgorithm(format!("PBKDF2 PRF: {}", params.prf_uri))
-    })?;
+    let hash = prf_uri_to_hash(&params.prf_uri)
+        .map_err(|_| Error::UnsupportedAlgorithm(format!("PBKDF2 PRF: {}", params.prf_uri)))?;
 
     let k_params = kryptering::kdf::Pbkdf2Params {
         hash,
@@ -120,9 +118,8 @@ pub fn hkdf_derive(
     params: &HkdfParams,
 ) -> Result<Vec<u8>, Error> {
     let prf_uri = params.prf_uri.as_deref().unwrap_or(algorithm::HMAC_SHA256);
-    let hash = prf_uri_to_hash(prf_uri).map_err(|_| {
-        Error::UnsupportedAlgorithm(format!("HKDF PRF: {prf_uri}"))
-    })?;
+    let hash = prf_uri_to_hash(prf_uri)
+        .map_err(|_| Error::UnsupportedAlgorithm(format!("HKDF PRF: {prf_uri}")))?;
 
     let k_params = kryptering::kdf::HkdfParams {
         hash,

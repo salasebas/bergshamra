@@ -50,7 +50,10 @@ fn test_pkcs11_provider_wrong_pin_fails() {
     let provider = kryptering::pkcs11::Pkcs11Provider::new(Path::new(softhsm_lib()))
         .expect("Failed to load SoftHSM2 library");
     let result = provider.open_session("wrong-pin");
-    assert!(result.is_err(), "Opening session with wrong PIN should fail");
+    assert!(
+        result.is_err(),
+        "Opening session with wrong PIN should fail"
+    );
 }
 
 #[test]
@@ -390,9 +393,7 @@ fn test_hsm_rsa_pss_sign_verify() {
 
     // Sign and verify
     let data = b"Hello from HSM - RSA-PSS test data";
-    let signature = signer
-        .sign(data)
-        .expect("RSA-PSS signing should succeed");
+    let signature = signer.sign(data).expect("RSA-PSS signing should succeed");
     assert!(!signature.is_empty(), "Signature should not be empty");
 
     let valid = verifier

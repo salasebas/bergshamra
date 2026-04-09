@@ -61,8 +61,14 @@ impl std::fmt::Debug for DsigContext {
             .field("enabled_key_data_x509", &self.enabled_key_data_x509)
             .field("trusted_keys_only", &self.trusted_keys_only)
             .field("strict_verification", &self.strict_verification)
-            .field("hsm_signer", &self.hsm_signer.as_ref().map(|_| "<hsm_signer>"))
-            .field("hsm_verifier", &self.hsm_verifier.as_ref().map(|_| "<hsm_verifier>"))
+            .field(
+                "hsm_signer",
+                &self.hsm_signer.as_ref().map(|_| "<hsm_signer>"),
+            )
+            .field(
+                "hsm_verifier",
+                &self.hsm_verifier.as_ref().map(|_| "<hsm_verifier>"),
+            )
             .finish()
     }
 }
