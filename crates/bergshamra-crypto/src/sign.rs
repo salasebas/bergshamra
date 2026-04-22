@@ -65,6 +65,31 @@ pub trait SignatureAlgorithm: Send {
     fn uri(&self) -> &'static str;
     fn sign(&self, key: &SigningKey, data: &[u8]) -> Result<Vec<u8>, Error>;
     fn verify(&self, key: &SigningKey, data: &[u8], signature: &[u8]) -> Result<bool, Error>;
+
+    /// Verify a signature that the verifier has pre-declared to be
+    /// truncated to `expected_len_bytes` bytes.
+    ///
+    /// The caller MUST enforce its protocol's policy minimum on
+    /// `expected_len_bytes` before invoking this method. For XML
+    /// Signature that means applying the CVE-2009-0217 floor (80 bits
+    /// unless the caller has explicit reason to accept less) — this
+    /// method does not enforce a minimum itself.
+    ///
+    /// Default impl requires `signature.len() == expected_len_bytes`
+    /// and delegates to [`verify`]. Algorithms that support
+    /// verifier-declared truncation (currently HMAC) override this.
+    fn verify_truncated(
+        &self,
+        key: &SigningKey,
+        data: &[u8],
+        signature: &[u8],
+        expected_len_bytes: usize,
+    ) -> Result<bool, Error> {
+        if signature.len() != expected_len_bytes {
+            return Ok(false);
+        }
+        self.verify(key, data, signature)
+    }
 }
 
 /// Create a signature algorithm from its URI (no context string).
@@ -865,6 +890,34 @@ impl SignatureAlgorithm for HmacSign {
         };
         let expected = compute_hmac(self.hash, key_bytes, data);
         Ok(constant_time_eq(&expected, sig_bytes))
+    }
+
+    fn verify_truncated(
+        &self,
+        key: &SigningKey,
+        data: &[u8],
+        sig_bytes: &[u8],
+        expected_len_bytes: usize,
+    ) -> Result<bool, Error> {
+        // XML Signature's HMACOutputLength (W3C XML-DSig §6.3.1 /
+        // RFC 4051 §2.3.2) lets a verifier pre-declare that it will
+        // accept only the first N bits of the full MAC. Route the
+        // length-aware compare through kryptering's
+        // `hmac_verify_truncated`, which owns the constant-time prefix
+        // compare against a verifier-declared length. The caller above
+        // (bergshamra-dsig verify.rs) has already validated
+        // `expected_len_bytes` against CVE-2009-0217 policy and
+        // confirmed `sig_bytes.len() == expected_len_bytes`.
+        let SigningKey::Hmac(key_bytes) = key else {
+            return Err(Error::Key("HMAC key required".into()));
+        };
+        Ok(kryptering::digest::hmac_verify_truncated(
+            hash_to_kryptering(self.hash),
+            key_bytes,
+            data,
+            sig_bytes,
+            expected_len_bytes,
+        ))
     }
 }
 

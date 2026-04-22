@@ -143,6 +143,12 @@ fn resolve_decryption_key(
     if let Some(ki_id) = key_info_id {
         // Try all EncryptedKey elements inside KeyInfo -- use the first that succeeds
         let mut last_ek_error = None;
+        // Capture the last DerivedKey error too. Silently swallowing derivation
+        // failures used to fall through to the KeyName lookup below, which
+        // returned the raw master-key bytes and surfaced far downstream as
+        // misleading errors like "expected 32 byte key, got 8" (the underlying
+        // PBKDF2 / ConcatKDF failure stayed invisible).
+        let mut last_derived_error = None;
         for child_id in doc.children(ki_id) {
             let elem = match doc.element(child_id) {
                 Some(e) => e,
@@ -162,8 +168,11 @@ fn resolve_decryption_key(
 
             // Try DerivedKey (ConcatKDF / PBKDF2)
             if child_ns == ns::ENC11 && child_local == ns::node::DERIVED_KEY {
-                if let Ok(key) = resolve_derived_key(ctx, doc, child_id, enc_uri) {
-                    return Ok(key);
+                match resolve_derived_key(ctx, doc, child_id, enc_uri) {
+                    Ok(key) => return Ok(key),
+                    Err(e) => {
+                        last_derived_error = Some(e);
+                    }
                 }
             }
         }
@@ -212,8 +221,14 @@ fn resolve_decryption_key(
             }
         }
 
-        // If we tried EncryptedKey elements but all failed, return the last error
+        // If we tried EncryptedKey elements but all failed, return the last error.
         if let Some(e) = last_ek_error {
+            return Err(e);
+        }
+        // Same for DerivedKey: a structurally-present DerivedKey whose derivation
+        // failed must surface as an error, not cascade into a KeyName fallback
+        // that silently uses the wrong key.
+        if let Some(e) = last_derived_error {
             return Err(e);
         }
     }

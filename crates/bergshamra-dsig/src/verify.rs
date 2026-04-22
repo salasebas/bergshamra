@@ -405,7 +405,16 @@ pub fn verify(ctx: &DsigContext, xml: &str) -> Result<VerifyResult, Error> {
         .ok_or_else(|| Error::Key("no signing key available".into()))?;
 
     let sig_alg = bergshamra_crypto::sign::from_uri_with_context(sig_method_uri, pq_context)?;
-    let valid = sig_alg.verify(&signing_key, &c14n_signed_info, &sig_value)?;
+    // When the XML carries an <HMACOutputLength> (parsed earlier and already
+    // checked against the CVE-2009-0217 floor in ctx.hmac_min_out_len), route
+    // through verify_truncated so the signature can be shorter than the
+    // full HMAC. For every other algorithm the default impl reduces to the
+    // usual verify() path.
+    let valid = if let Some(bits) = hmac_output_length_bits {
+        sig_alg.verify_truncated(&signing_key, &c14n_signed_info, &sig_value, bits / 8)?
+    } else {
+        sig_alg.verify(&signing_key, &c14n_signed_info, &sig_value)?
+    };
 
     if valid {
         Ok(VerifyResult::Valid {

@@ -55,13 +55,19 @@ pub fn ecdh_x25519(originator_public: &[u8], recipient_private: &[u8]) -> Result
 /// All values are big-endian byte arrays. The result is zero-padded on the left
 /// to the byte-length of p (as required by the DH-ES specification). Requires
 /// `q` for subgroup validation.
+///
+/// Backed by `kryptering::hazmat::dh::compute`, which uses
+/// `crypto-bigint 0.7`'s `BoxedMontyForm::pow` for constant-time-on-pattern
+/// modular exponentiation (bit-length leak closed by padding the exponent
+/// to `p.bits()`). See the hazmat module's doc for residual side-channel
+/// caveats.
 pub fn dh_compute(
     other_public: &[u8],
     my_private: &[u8],
     p: &[u8],
     q: Option<&[u8]>,
 ) -> Result<Vec<u8>, Error> {
-    kryptering::keyagreement::dh_compute(other_public, my_private, p, q)
+    kryptering::hazmat::dh::compute(other_public, my_private, p, q)
         .map_err(crate::map_kryptering_err)
 }
 

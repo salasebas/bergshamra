@@ -91,7 +91,12 @@ fn resolve_encryption_key(
     let key_info = find_child_element(doc, enc_data_id, ns::DSIG, ns::node::KEY_INFO);
 
     if let Some(ki_id) = key_info {
-        // Check for KeyName
+        // Capture the last DerivedKey derivation failure. Silently swallowing
+        // these used to let the encrypt path fall through to the KeyName /
+        // first-key fallbacks, surfacing downstream as misleading errors
+        // ("expected 32 byte key, got 8") rather than the actual PBKDF2 /
+        // ConcatKDF failure.
+        let mut last_derived_error = None;
         for child_id in doc.children(ki_id) {
             let elem = match doc.element(child_id) {
                 Some(e) => e,
@@ -120,10 +125,17 @@ fn resolve_encryption_key(
 
             // Check for DerivedKey (ConcatKDF / PBKDF2)
             if child_ns == ns::ENC11 && child_local == ns::node::DERIVED_KEY {
-                if let Ok(key) = crate::decrypt::resolve_derived_key(ctx, doc, child_id, enc_uri) {
-                    return Ok(key);
+                match crate::decrypt::resolve_derived_key(ctx, doc, child_id, enc_uri) {
+                    Ok(key) => return Ok(key),
+                    Err(e) => last_derived_error = Some(e),
                 }
             }
+        }
+        // A structurally-present DerivedKey whose derivation failed must
+        // surface as an error rather than cascade into the KeyName / first-key
+        // fallback below.
+        if let Some(e) = last_derived_error {
+            return Err(e);
         }
     }
 

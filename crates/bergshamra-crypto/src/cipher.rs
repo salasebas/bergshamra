@@ -71,11 +71,30 @@ impl CipherAlgorithm for KrypteringCipher {
     }
 
     fn encrypt(&self, key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, Error> {
-        kryptering::cipher::encrypt(self.algo, key, plaintext).map_err(crate::map_kryptering_err)
+        match self.algo {
+            // AES-CBC lives under kryptering::hazmat::aes_cbc because it is
+            // unauthenticated and a padding-oracle hazard when exposed to
+            // remote attackers. XML-Enc 1.0 requires it for interop, which
+            // is the legitimate use case here; the hazard still applies and
+            // callers must authenticate ciphertexts out of band.
+            KCipherAlgorithm::AesCbc(size) => {
+                kryptering::hazmat::aes_cbc::encrypt(size, key, plaintext)
+                    .map_err(crate::map_kryptering_err)
+            }
+            _ => kryptering::cipher::encrypt(self.algo, key, plaintext)
+                .map_err(crate::map_kryptering_err),
+        }
     }
 
     fn decrypt(&self, key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, Error> {
-        kryptering::cipher::decrypt(self.algo, key, ciphertext).map_err(crate::map_kryptering_err)
+        match self.algo {
+            KCipherAlgorithm::AesCbc(size) => {
+                kryptering::hazmat::aes_cbc::decrypt(size, key, ciphertext)
+                    .map_err(crate::map_kryptering_err)
+            }
+            _ => kryptering::cipher::decrypt(self.algo, key, ciphertext)
+                .map_err(crate::map_kryptering_err),
+        }
     }
 }
 
