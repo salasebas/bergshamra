@@ -3647,9 +3647,9 @@ mod tests {
             .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()))
     }
 
-    /// Helper: create a default DsigContext (no keys, insecure, no cert validation).
+    /// Helper: create a permissive DsigContext (no keys, insecure, no cert validation).
     fn default_ctx() -> DsigContext {
-        DsigContext::new(bergshamra_keys::KeysManager::new())
+        DsigContext::new_permissive(bergshamra_keys::KeysManager::new())
     }
 
     #[test]
@@ -3746,7 +3746,7 @@ mod tests {
         let key = bergshamra_keys::loader::load_x509_cert_pem(cert_pem.as_bytes())
             .expect("load rootxmlns.crt");
         mgr.add_key(key);
-        let ctx = DsigContext::new(mgr);
+        let ctx = DsigContext::new_permissive(mgr);
         let result = verify(&ctx, &xml).expect("verify should not return Err");
         assert!(
             result.is_valid(),

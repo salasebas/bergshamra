@@ -74,8 +74,38 @@ impl std::fmt::Debug for DsigContext {
 }
 
 impl DsigContext {
-    /// Create a new DSig context with the given keys manager.
+    /// Create a new DSig context with secure defaults.
+    ///
+    /// The defaults are hardened for federated identity (SAML, WS-Security):
+    /// - **`trusted_keys_only = true`** — reject inline keys from `<KeyInfo>` (KeyValue,
+    ///   X509Certificate, etc.); only use pre-configured keys from the `KeysManager`.
+    /// - **`strict_verification = true`** — reject references to nodes that are not
+    ///   ancestors, siblings, or the document element relative to the `<Signature>`
+    ///   (XSW protection).
+    /// - **`hmac_min_out_len = 160`** — enforce minimum HMAC output length of 160 bits
+    ///   to prevent truncation attacks (CVE-2009-0217).
+    ///
+    /// Use [`new_permissive()`](Self::new_permissive) if you need the W3C XML-DSig
+    /// default behavior (e.g., self-contained signatures with inline keys).
     pub fn new(keys_manager: KeysManager) -> Self {
+        Self {
+            trusted_keys_only: true,
+            strict_verification: true,
+            hmac_min_out_len: 160,
+            ..Self::new_permissive(keys_manager)
+        }
+    }
+
+    /// Create a DSig context with permissive defaults (W3C XML-DSig standard behavior).
+    ///
+    /// This accepts inline keys from `<KeyInfo>`, does not enforce reference positions,
+    /// and does not enforce a minimum HMAC output length. Suitable for document signing
+    /// with self-contained signatures, or when the caller overrides all security-relevant
+    /// fields explicitly.
+    ///
+    /// **For SAML, WS-Security, or any protocol with pre-established key trust, use
+    /// [`new()`](Self::new) instead.**
+    pub fn new_permissive(keys_manager: KeysManager) -> Self {
         Self {
             keys_manager,
             id_attrs: Vec::new(),

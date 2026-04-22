@@ -500,7 +500,7 @@ fn cmd_verify(
         }
     }
 
-    let mut ctx = bergshamra_dsig::DsigContext::new(mgr);
+    let mut ctx = bergshamra_dsig::DsigContext::new_permissive(mgr);
     for attr in &id_attr {
         ctx.add_id_attr(attr);
     }
@@ -582,7 +582,7 @@ fn cmd_sign(
         mgr.insert_key_first(key);
     }
 
-    let mut ctx = bergshamra_dsig::DsigContext::new(mgr);
+    let mut ctx = bergshamra_dsig::DsigContext::new_permissive(mgr);
     for attr in &id_attr {
         ctx.add_id_attr(attr);
     }
