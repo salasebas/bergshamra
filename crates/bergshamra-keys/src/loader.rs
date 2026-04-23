@@ -1036,7 +1036,10 @@ pub fn try_load_pq_private_key(der: &[u8]) -> Option<Key> {
                 if inner_bytes.len() == 32 {
                     let seed =
                         ml_dsa::Seed::try_from(inner_bytes).expect("seed length already checked");
-                    let sk = ml_dsa::SigningKey::<$paramset>::from_seed(&seed);
+                    // `from_seed` moved from `SigningKey` to the `KeyGen` trait
+                    // in ml-dsa 0.1.0-rc.8; the returned `SigningKey` is the
+                    // same wrapper type.
+                    let sk = <$paramset as ml_dsa::KeyGen>::from_seed(&seed);
                     let vk = sk.verifying_key();
                     if let Ok(pub_doc) = vk.to_public_key_der() {
                         // Store just the 32-byte seed — sign.rs will use from_seed()

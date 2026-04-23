@@ -457,7 +457,11 @@ impl SignatureAlgorithm for RsaPss {
         let SigningKey::Rsa(private_key) = key else {
             return Err(Error::Key("RSA private key required for PSS".into()));
         };
-        let mut rng = rand::thread_rng();
+        // `signature 2.2.0` consumes `rand_core 0.6 CryptoRngCore`, which
+        // `getrandom::SysRng` (rand_core 0.10) does not satisfy. `rand::rngs::OsRng`
+        // is the rand-0.8-track equivalent: same OS-entropy syscall per draw, zero
+        // user-space state, fork-safe. See docs/adr/0003-rng-choice.md.
+        let mut rng = rand::rngs::OsRng;
         macro_rules! do_sign {
             ($hasher:ty) => {{
                 let sk = rsa::pss::SigningKey::<$hasher>::new(private_key.clone());
@@ -1090,9 +1094,13 @@ where
     P: ml_dsa::MlDsaParams + ml_dsa::KeyGen,
     P: pkcs8_pq::spki::AssociatedAlgorithmIdentifier<Params = pkcs8_pq::der::AnyRef<'static>>,
 {
+    // `getrandom::SysRng` is a zero-sized, stateless, fork-safe wrapper over
+    // the OS entropy syscall. `sign_randomized` takes `TryCryptoRng`, so OS
+    // RNG failures surface as `ml_dsa::Error` via the `?` below rather than
+    // panicking. See docs/adr/0003-rng-choice.md.
     let sk = load_ml_dsa_signing_key::<P>(private_der)?;
     let sig = sk
-        .sign_deterministic(data, context)
+        .sign_randomized(data, context, &mut getrandom::SysRng)
         .map_err(|e| Error::Crypto(format!("ML-DSA sign failed: {e}")))?;
     Ok(sig.encode().to_vec())
 }
@@ -1152,21 +1160,21 @@ where
 }
 
 /// Load an ML-DSA signing key from either PKCS#8 DER or a 32-byte seed.
-fn load_ml_dsa_signing_key<P>(private_der: &[u8]) -> Result<ml_dsa::SigningKey<P>, Error>
+fn load_ml_dsa_signing_key<P>(private_der: &[u8]) -> Result<ml_dsa::ExpandedSigningKey<P>, Error>
 where
     P: ml_dsa::MlDsaParams + ml_dsa::KeyGen,
     P: pkcs8_pq::spki::AssociatedAlgorithmIdentifier<Params = pkcs8_pq::der::AnyRef<'static>>,
 {
     // Try full PKCS#8 DER first (RustCrypto format)
     use pkcs8_pq::DecodePrivateKey;
-    if let Ok(sk) = ml_dsa::SigningKey::<P>::from_pkcs8_der(private_der) {
+    if let Ok(sk) = ml_dsa::ExpandedSigningKey::<P>::from_pkcs8_der(private_der) {
         return Ok(sk);
     }
     // Fall back to 32-byte seed (from OpenSSL format, extracted by loader)
     if private_der.len() == 32 {
         let seed = ml_dsa::Seed::try_from(private_der)
             .map_err(|_| Error::Key("invalid ML-DSA seed length".into()))?;
-        return Ok(ml_dsa::SigningKey::<P>::from_seed(&seed));
+        return Ok(ml_dsa::ExpandedSigningKey::<P>::from_seed(&seed));
     }
     Err(Error::Key(format!(
         "failed to parse ML-DSA private key: expected PKCS#8 DER or 32-byte seed, got {} bytes",
