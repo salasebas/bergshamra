@@ -3,12 +3,12 @@
 //! XML-DSig signature verification.
 //!
 //! Processing order per spec Section 3.2:
-//! 1. Parse <Signature>, register ID attributes
-//! 2. Read <SignedInfo>: CanonicalizationMethod, SignatureMethod
-//! 3. For each <Reference>: resolve URI, run transforms, compute digest, compare
-//! 4. Resolve signing key from <KeyInfo>
-//! 5. Canonicalize <SignedInfo>
-//! 6. Verify <SignatureValue>
+//! 1. Parse `<Signature>`, register ID attributes
+//! 2. Read `<SignedInfo>`: CanonicalizationMethod, SignatureMethod
+//! 3. For each `<Reference>`: resolve URI, run transforms, compute digest, compare
+//! 4. Resolve signing key from `<KeyInfo>`
+//! 5. Canonicalize `<SignedInfo>`
+//! 6. Verify `<SignatureValue>`
 
 use crate::context::DsigContext;
 use bergshamra_c14n::C14nMode;

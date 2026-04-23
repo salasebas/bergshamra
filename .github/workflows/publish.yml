@@ -1,0 +1,68 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Note on crates.io publishing
+# -----------------------------
+# Bergshamra's workspace Cargo.toml pins kryptering as an absolute path
+# dependency:
+#     kryptering = { path = "/home/kdas/code/kryptering", ... }
+# `cargo publish` rejects any member crate whose transitive dependency graph
+# includes a `path`-only dep without a `version` fallback — so the four
+# bergshamra crates that reach kryptering (bergshamra-crypto, bergshamra-dsig,
+# bergshamra-enc, bergshamra-keys) cannot be pushed to crates.io from this
+# workflow as-is. Until kryptering is published and the workspace switches
+# to `{ path = "…", version = "0.2" }` form, this workflow only cuts a
+# GitHub Release. Re-introduce a `publish-crate` job (see
+# kryptering/.github/workflows/publish.yml for the shape) once the
+# kryptering dep is crates.io-resolvable.
+
+jobs:
+  # Sanity: the workspace must compile & test from a fresh checkout of the
+  # tagged commit before we advertise a release.
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Verify tag matches workspace version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.workspace_members[0]' \
+            | awk '{print $2}')
+          if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match workspace version v${version}" >&2
+            exit 1
+          fi
+
+      - name: Build workspace
+        run: cargo build --locked --workspace --all-features
+
+      - name: Test workspace
+        run: cargo test --locked --workspace --all-features --lib
+
+  release:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true

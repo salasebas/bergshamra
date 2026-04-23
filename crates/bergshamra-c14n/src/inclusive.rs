@@ -76,74 +76,68 @@ impl<'a, 'doc> C14nContext<'a, 'doc> {
             Some(NodeKind::Element(_)) => {
                 self.process_element(id, output, inherited_ns)?;
             }
-            Some(NodeKind::Text(text)) | Some(NodeKind::CData(text)) => {
-                if self.is_visible(id) {
-                    let text = text.clone();
-                    output.extend_from_slice(escape::escape_text(&text).as_bytes());
-                }
+            Some(NodeKind::Text(text)) | Some(NodeKind::CData(text)) if self.is_visible(id) => {
+                let text = text.clone();
+                output.extend_from_slice(escape::escape_text(&text).as_bytes());
             }
-            Some(NodeKind::Comment(text)) => {
-                if self.with_comments && self.is_visible(id) {
-                    let text = text.clone();
-                    // Check if we need newlines around comments at the document level
-                    let parent_is_root = self
-                        .doc
-                        .parent(id)
-                        .is_some_and(|p| matches!(self.doc.node_kind(p), Some(NodeKind::Document)));
+            Some(NodeKind::Comment(text)) if self.with_comments && self.is_visible(id) => {
+                let text = text.clone();
+                // Check if we need newlines around comments at the document level
+                let parent_is_root = self
+                    .doc
+                    .parent(id)
+                    .is_some_and(|p| matches!(self.doc.node_kind(p), Some(NodeKind::Document)));
 
-                    if parent_is_root {
-                        // Before document element: comment\n
-                        // After document element: \ncomment
-                        let has_preceding_element = has_preceding_element(self.doc, id);
-                        if has_preceding_element {
-                            output.push(b'\n');
-                        }
+                if parent_is_root {
+                    // Before document element: comment\n
+                    // After document element: \ncomment
+                    let has_preceding_element = has_preceding_element(self.doc, id);
+                    if has_preceding_element {
+                        output.push(b'\n');
                     }
+                }
 
-                    output.extend_from_slice(b"<!--");
-                    output.extend_from_slice(text.as_bytes());
-                    output.extend_from_slice(b"-->");
+                output.extend_from_slice(b"<!--");
+                output.extend_from_slice(text.as_bytes());
+                output.extend_from_slice(b"-->");
 
-                    if parent_is_root {
-                        let has_following_element = has_following_element(self.doc, id);
-                        if has_following_element {
-                            output.push(b'\n');
-                        }
+                if parent_is_root {
+                    let has_following_element = has_following_element(self.doc, id);
+                    if has_following_element {
+                        output.push(b'\n');
                     }
                 }
             }
-            Some(NodeKind::ProcessingInstruction(pi)) => {
-                if self.is_visible(id) {
-                    let target = pi.target.clone();
-                    let data = pi.data.clone();
+            Some(NodeKind::ProcessingInstruction(pi)) if self.is_visible(id) => {
+                let target = pi.target.clone();
+                let data = pi.data.clone();
 
-                    let parent_is_root = self
-                        .doc
-                        .parent(id)
-                        .is_some_and(|p| matches!(self.doc.node_kind(p), Some(NodeKind::Document)));
+                let parent_is_root = self
+                    .doc
+                    .parent(id)
+                    .is_some_and(|p| matches!(self.doc.node_kind(p), Some(NodeKind::Document)));
 
-                    if parent_is_root {
-                        let has_preceding_element = has_preceding_element(self.doc, id);
-                        if has_preceding_element {
-                            output.push(b'\n');
-                        }
+                if parent_is_root {
+                    let has_preceding_element = has_preceding_element(self.doc, id);
+                    if has_preceding_element {
+                        output.push(b'\n');
                     }
+                }
 
-                    output.extend_from_slice(b"<?");
-                    output.extend_from_slice(target.as_bytes());
-                    if let Some(value) = &data {
-                        if !value.is_empty() {
-                            output.push(b' ');
-                            output.extend_from_slice(escape::escape_pi(value).as_bytes());
-                        }
+                output.extend_from_slice(b"<?");
+                output.extend_from_slice(target.as_bytes());
+                if let Some(value) = &data {
+                    if !value.is_empty() {
+                        output.push(b' ');
+                        output.extend_from_slice(escape::escape_pi(value).as_bytes());
                     }
-                    output.extend_from_slice(b"?>");
+                }
+                output.extend_from_slice(b"?>");
 
-                    if parent_is_root {
-                        let has_following_element = has_following_element(self.doc, id);
-                        if has_following_element {
-                            output.push(b'\n');
-                        }
+                if parent_is_root {
+                    let has_following_element = has_following_element(self.doc, id);
+                    if has_following_element {
+                        output.push(b'\n');
                     }
                 }
             }

@@ -78,13 +78,13 @@ fn resolve_digest(uri: Option<&str>) -> HashAlgorithm {
         Some(algorithm::RIPEMD160) => HashAlgorithm::Ripemd160,
         #[cfg(feature = "legacy-algorithms")]
         Some(algorithm::MD5) => HashAlgorithm::Md5,
-        Some(other) => {
+        Some(_other) => {
             #[cfg(feature = "legacy-algorithms")]
-            if other.contains("ripemd160") {
+            if _other.contains("ripemd160") {
                 return HashAlgorithm::Ripemd160;
             }
             #[cfg(feature = "legacy-algorithms")]
-            if other.contains("md5") {
+            if _other.contains("md5") {
                 return HashAlgorithm::Md5;
             }
             HashAlgorithm::Sha1

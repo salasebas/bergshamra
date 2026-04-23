@@ -1091,7 +1091,7 @@ fn encrypt_session_key_in_template(
 
     // Apply replacements in reverse order (to preserve offsets)
     let mut result = xml.to_owned();
-    replacements.sort_by(|a, b| b.0.start.cmp(&a.0.start));
+    replacements.sort_by_key(|r| std::cmp::Reverse(r.0.start));
     for (range, replacement) in replacements {
         result.replace_range(range, &replacement);
     }

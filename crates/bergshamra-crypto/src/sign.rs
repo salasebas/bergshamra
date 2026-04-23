@@ -76,8 +76,8 @@ pub trait SignatureAlgorithm: Send {
     /// method does not enforce a minimum itself.
     ///
     /// Default impl requires `signature.len() == expected_len_bytes`
-    /// and delegates to [`verify`]. Algorithms that support
-    /// verifier-declared truncation (currently HMAC) override this.
+    /// and delegates to [`SignatureAlgorithm::verify`]. Algorithms that
+    /// support verifier-declared truncation (currently HMAC) override this.
     fn verify_truncated(
         &self,
         key: &SigningKey,
@@ -1300,9 +1300,8 @@ mod tests {
         // Verify against tampered data should return Ok(false)
         let verify_key = super::SigningKey::Ed25519Public(vk);
         let result = algo.verify(&verify_key, tampered, &signature);
-        assert_eq!(
-            result.unwrap(),
-            false,
+        assert!(
+            !result.unwrap(),
             "Ed25519 verification of tampered data should return false"
         );
     }
@@ -1331,12 +1330,11 @@ mod tests {
         let verify_key = super::SigningKey::Ed25519Public(vk);
         let result = algo.verify(&verify_key, data, &signature);
         // May return Ok(false) or Err depending on whether the tampered sig is parseable
-        match result {
-            Ok(valid) => assert!(
+        if let Ok(valid) = result {
+            assert!(
                 !valid,
                 "Ed25519 verification of tampered signature should be false"
-            ),
-            Err(_) => {} // Also acceptable — invalid signature bytes
+            );
         }
     }
 
