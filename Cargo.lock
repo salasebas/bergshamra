@@ -1492,6 +1492,8 @@ checksum = "1301e935010a701ae5f8655edc0ad17c44bad3ac5ce8c39185f75453b720ae94"
 dependencies = [
  "const-oid 0.9.6",
  "der 0.7.10",
+ "sha1",
+ "signature 2.2.0",
  "spki 0.7.3",
  "tls_codec",
 ]
