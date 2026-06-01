@@ -301,8 +301,17 @@ pub fn verify(ctx: &DsigContext, xml: &str) -> Result<VerifyResult, Error> {
 
     // 4b. X.509 certificate chain validation
     if !ctx.insecure {
+        // When the caller has configured trust anchors (e.g. `--trusted`), any
+        // key derived from a certificate MUST chain to one of them — otherwise an
+        // attacker could embed a self-signed certificate in <KeyInfo> and have it
+        // trusted. This is in addition to the explicit --enabled-key-data x509
+        // and --verify-keys triggers. When no trust anchors are configured,
+        // validate_cert_chain has nothing to check, so we skip it (unchanged
+        // behavior for the no-`--trusted` path).
+        let has_trusted_anchors = !ctx.keys_manager.trusted_certs().is_empty();
         let needs_x509_validation = (ctx.enabled_key_data_x509 && key_from_x509)
-            || (ctx.verify_keys && key_from_manager && !key.x509_chain.is_empty());
+            || (ctx.verify_keys && key_from_manager && !key.x509_chain.is_empty())
+            || (has_trusted_anchors && !key.x509_chain.is_empty());
 
         if needs_x509_validation && !key.x509_chain.is_empty() {
             let config = bergshamra_keys::x509::CertValidationConfig {
@@ -3909,6 +3918,88 @@ mod tests {
         assert!(
             err_msg.contains("Algorithm") || err_msg.contains("CanonicalizationMethod"),
             "error should mention Algorithm, got: {err_msg}"
+        );
+    }
+
+    // --- Trust-anchor validation of inline X.509 certificate chains ---
+
+    /// Decode every PEM CERTIFICATE block in a file into DER bytes.
+    fn load_certs_der(path: &str) -> Vec<Vec<u8>> {
+        use base64::Engine;
+        let pem = std::fs::read_to_string(path).unwrap_or_default();
+        let engine = base64::engine::general_purpose::STANDARD;
+        let mut out = Vec::new();
+        let mut rest = pem.as_str();
+        const BEGIN: &str = "-----BEGIN CERTIFICATE-----";
+        const END: &str = "-----END CERTIFICATE-----";
+        while let Some(s) = rest.find(BEGIN) {
+            let after = &rest[s + BEGIN.len()..];
+            let Some(e) = after.find(END) else { break };
+            let b64: String = after[..e].chars().filter(|c| !c.is_whitespace()).collect();
+            if let Ok(der) = engine.decode(b64) {
+                out.push(der);
+            }
+            rest = &after[e..];
+        }
+        out
+    }
+
+    /// A signed document carrying an inline `<X509Certificate>` chain (no KeyValue),
+    /// whose leaf is issued by `test-data/keys/cacert.pem`.
+    const X509_INLINE_DOC: &str = "../../test-data/aleksey-xmldsig-01/enveloping-sha256-rsa-sha256.xml";
+
+    fn ctx_trusting(ca_pem: &str) -> Option<DsigContext> {
+        let certs = load_certs_der(ca_pem);
+        if certs.is_empty() {
+            return None; // test-data not available — skip
+        }
+        let mut mgr = bergshamra_keys::KeysManager::new();
+        for der in certs {
+            mgr.add_trusted_cert(der);
+        }
+        let mut ctx = DsigContext::new(mgr);
+        // Isolate the trust-chain decision from cert expiry so the test is stable.
+        ctx.skip_time_checks = true;
+        Some(ctx)
+    }
+
+    #[test]
+    fn test_trusted_inline_cert_rejected_when_wrong_ca() {
+        // When trust anchors are configured, an inline
+        // certificate that does NOT chain to a trusted CA must be rejected. Chain
+        // validation otherwise only ran with --enabled-key-data x509 or
+        // --verify-keys, so a self-signed/attacker certificate could be accepted.
+        let xml = match std::fs::read_to_string(X509_INLINE_DOC) {
+            Ok(s) => s,
+            Err(_) => return, // skip if test-data missing
+        };
+        let ctx = match ctx_trusting("../../test-data/keys/ca2cert.pem") {
+            Some(c) => c,
+            None => return,
+        };
+        let result = verify(&ctx, &xml);
+        let rejected = matches!(result, Ok(VerifyResult::Invalid { .. })) || result.is_err();
+        assert!(
+            rejected,
+            "inline cert not chaining to the trusted CA must be rejected, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_trusted_inline_cert_accepted_when_correct_ca() {
+        // Counterpart: when the inline cert DOES chain to the trusted CA, it verifies.
+        let xml = match std::fs::read_to_string(X509_INLINE_DOC) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let ctx = match ctx_trusting("../../test-data/keys/cacert.pem") {
+            Some(c) => c,
+            None => return,
+        };
+        let result = verify(&ctx, &xml).expect("verify should not return Err");
+        assert!(
+            result.is_valid(),
+            "inline cert chaining to the trusted CA must verify, got: {result:?}"
         );
     }
 }
