@@ -43,3 +43,4 @@ uppsala.workspace = true
 
 [dev-dependencies]
 rand.workspace = true
+x509-cert = { workspace = true, features = ["builder"] }

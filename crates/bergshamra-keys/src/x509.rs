@@ -160,6 +160,40 @@ fn check_cert_time_validity(cert: &Certificate, verif_time: &der::DateTime) -> R
     Ok(())
 }
 
+/// Returns true only if the certificate carries a BasicConstraints extension
+/// asserting `cA=TRUE`. A certificate with no BasicConstraints (or `cA=FALSE`)
+/// is treated as a non-CA, per RFC 5280.
+fn cert_is_ca(cert: &Certificate) -> bool {
+    use x509_cert::ext::pkix::BasicConstraints;
+    let bc_oid = der::oid::ObjectIdentifier::new_unwrap("2.5.29.19");
+    if let Some(exts) = &cert.tbs_certificate.extensions {
+        for ext in exts.iter() {
+            if ext.extn_id == bc_oid {
+                if let Ok(bc) = BasicConstraints::from_der(ext.extn_value.as_bytes()) {
+                    return bc.ca;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Returns the BasicConstraints `pathLenConstraint` of `cert`, if present.
+/// `None` means no path-length limit is imposed by this certificate.
+fn ca_path_len_constraint(cert: &Certificate) -> Option<u8> {
+    use x509_cert::ext::pkix::BasicConstraints;
+    let bc_oid = der::oid::ObjectIdentifier::new_unwrap("2.5.29.19");
+    let exts = cert.tbs_certificate.extensions.as_ref()?;
+    for ext in exts.iter() {
+        if ext.extn_id == bc_oid {
+            if let Ok(bc) = BasicConstraints::from_der(ext.extn_value.as_bytes()) {
+                return bc.path_len_constraint;
+            }
+        }
+    }
+    None
+}
+
 /// Build a chain from the leaf to a trusted root and verify signatures along the way.
 fn build_and_verify_chain(
     leaf: &Certificate,
@@ -216,6 +250,14 @@ fn build_and_verify_chain(
                 if verify_cert_signature(&current, &tc.tbs_certificate.subject_public_key_info)
                     .is_ok()
                 {
+                    // Enforce the issuer's pathLenConstraint, if any.
+                    if let Some(maxlen) = ca_path_len_constraint(tc) {
+                        if visited.len() - 1 > maxlen as usize {
+                            return Err(Error::Certificate(
+                                "certificate chain violates pathLenConstraint".into(),
+                            ));
+                        }
+                    }
                     // Check time validity of the trusted cert too
                     if !config.skip_time_checks {
                         if let Ok(verif_time) = resolve_verification_time(config.verification_time)
@@ -235,6 +277,7 @@ fn build_and_verify_chain(
 
         // Try to find issuer in available (untrusted) certs
         let mut found_intermediate = false;
+        let mut rejected_non_ca = false;
         for (ic, ic_der) in available {
             if visited.contains(ic_der) {
                 continue; // avoid cycles
@@ -245,6 +288,23 @@ fn build_and_verify_chain(
                 if verify_cert_signature(&current, &ic.tbs_certificate.subject_public_key_info)
                     .is_ok()
                 {
+                    // An untrusted intermediate that vouches for another certificate
+                    // MUST be a CA (BasicConstraints cA=true). Without this check any
+                    // end-entity cert could be used to issue a forged certificate
+                    // (cert injection / XML Signature Wrapping via attacker KeyInfo).
+                    if !cert_is_ca(ic) {
+                        rejected_non_ca = true;
+                        continue;
+                    }
+                    // Enforce the intermediate's pathLenConstraint, if any: at most
+                    // `maxlen` intermediate certs may appear below it in the path.
+                    if let Some(maxlen) = ca_path_len_constraint(ic) {
+                        if visited.len() - 1 > maxlen as usize {
+                            return Err(Error::Certificate(
+                                "certificate chain violates pathLenConstraint".into(),
+                            ));
+                        }
+                    }
                     // Check time validity
                     if !config.skip_time_checks {
                         if let Ok(verif_time) = resolve_verification_time(config.verification_time)
@@ -261,9 +321,11 @@ fn build_and_verify_chain(
         }
 
         if !found_intermediate {
-            return Err(Error::Certificate(
-                "cannot find issuer certificate (incomplete chain)".to_string(),
-            ));
+            return Err(Error::Certificate(if rejected_non_ca {
+                "issuer certificate is not a CA (BasicConstraints cA is not true)".to_string()
+            } else {
+                "cannot find issuer certificate (incomplete chain)".to_string()
+            }));
         }
     }
 
@@ -500,4 +562,153 @@ fn check_crls(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use der::{Decode, Encode};
+    use p256::ecdsa::{DerSignature, SigningKey};
+    use spki::{EncodePublicKey, SubjectPublicKeyInfoOwned};
+    use std::str::FromStr;
+    use std::time::Duration;
+    use x509_cert::builder::{Builder, CertificateBuilder, Profile};
+    use x509_cert::name::Name;
+    use x509_cert::serial_number::SerialNumber;
+    use x509_cert::time::Validity;
+
+    fn spki_of(sk: &SigningKey) -> SubjectPublicKeyInfoOwned {
+        let der = sk.verifying_key().to_public_key_der().unwrap();
+        SubjectPublicKeyInfoOwned::try_from(der.as_bytes()).unwrap()
+    }
+
+    fn gen_cert(profile: Profile, subject: &str, subject_key: &SigningKey, signer: &SigningKey) -> Vec<u8> {
+        let builder = CertificateBuilder::new(
+            profile,
+            SerialNumber::from(1u32),
+            Validity::from_now(Duration::new(3600, 0)).unwrap(),
+            Name::from_str(subject).unwrap(),
+            spki_of(subject_key),
+            signer,
+        )
+        .unwrap();
+        builder.build::<DerSignature>().unwrap().to_der().unwrap()
+    }
+
+    fn leaf_profile(issuer: &str) -> Profile {
+        Profile::Leaf {
+            issuer: Name::from_str(issuer).unwrap(),
+            enable_key_agreement: false,
+            enable_key_encipherment: false,
+        }
+    }
+
+    fn cfg(trusted: &[Vec<u8>]) -> CertValidationConfig<'_> {
+        CertValidationConfig {
+            trusted_certs: trusted,
+            untrusted_certs: &[],
+            crls: &[],
+            verification_time: None,
+            skip_time_checks: true,
+        }
+    }
+
+    // Regression for issue #16: a non-CA cert MUST NOT be usable as an
+    // intermediate issuer. Pre-fix this validated successfully.
+    #[test]
+    fn non_ca_intermediate_is_rejected() {
+        let mut rng = rand::thread_rng();
+        let (root_k, mid_k, leaf_k) = (
+            SigningKey::random(&mut rng),
+            SigningKey::random(&mut rng),
+            SigningKey::random(&mut rng),
+        );
+        let root = gen_cert(Profile::Root, "CN=Test Root", &root_k, &root_k);
+        // End-entity (cA=FALSE) but signed by the trusted root.
+        let non_ca = gen_cert(leaf_profile("CN=Test Root"), "CN=Evil Intermediate", &mid_k, &root_k);
+        // Forged leaf signed by the non-CA cert.
+        let leaf = gen_cert(leaf_profile("CN=Evil Intermediate"), "CN=Forged Leaf", &leaf_k, &mid_k);
+
+        let trusted = vec![root];
+        let err = validate_cert_chain(&leaf, &[non_ca], &cfg(&trusted)).unwrap_err();
+        assert!(err.to_string().contains("not a CA"), "expected CA rejection, got: {err}");
+    }
+
+    // A legitimate CA intermediate is still accepted through the same branch.
+    #[test]
+    fn ca_intermediate_is_accepted() {
+        let mut rng = rand::thread_rng();
+        let (root_k, sub_k, leaf_k) = (
+            SigningKey::random(&mut rng),
+            SigningKey::random(&mut rng),
+            SigningKey::random(&mut rng),
+        );
+        let root = gen_cert(Profile::Root, "CN=Test Root", &root_k, &root_k);
+        let sub_ca = gen_cert(
+            Profile::SubCA { issuer: Name::from_str("CN=Test Root").unwrap(), path_len_constraint: None },
+            "CN=Real SubCA",
+            &sub_k,
+            &root_k,
+        );
+        let leaf = gen_cert(leaf_profile("CN=Real SubCA"), "CN=Good Leaf", &leaf_k, &sub_k);
+
+        let trusted = vec![root];
+        validate_cert_chain(&leaf, &[sub_ca], &cfg(&trusted)).expect("CA-chained leaf should validate");
+    }
+
+    // cert_is_ca distinguishes a real CA root from a real end-entity cert.
+    #[test]
+    fn cert_is_ca_discriminates() {
+        let base = "../../test-data/merlin-xmldsig-twenty-three/certs";
+        let ca = std::fs::read(format!("{base}/ca.der")).unwrap();
+        let leaf = std::fs::read(format!("{base}/nemain.der")).unwrap();
+        assert!(cert_is_ca(&Certificate::from_der(&ca).unwrap()));
+        assert!(!cert_is_ca(&Certificate::from_der(&leaf).unwrap()));
+    }
+
+    // A pathLenConstraint that is exceeded by an extra intermediate is rejected.
+    #[test]
+    fn pathlen_exceeded_is_rejected() {
+        let mut rng = rand::thread_rng();
+        let (root_k, sub_k, sub2_k, leaf_k) = (
+            SigningKey::random(&mut rng),
+            SigningKey::random(&mut rng),
+            SigningKey::random(&mut rng),
+            SigningKey::random(&mut rng),
+        );
+        let root = gen_cert(Profile::Root, "CN=Test Root", &root_k, &root_k);
+        let sub = gen_cert(
+            Profile::SubCA { issuer: Name::from_str("CN=Test Root").unwrap(), path_len_constraint: Some(0) },
+            "CN=SubCA0", &sub_k, &root_k,
+        );
+        let sub2 = gen_cert(
+            Profile::SubCA { issuer: Name::from_str("CN=SubCA0").unwrap(), path_len_constraint: None },
+            "CN=SubCA2", &sub2_k, &sub_k,
+        );
+        let leaf = gen_cert(leaf_profile("CN=SubCA2"), "CN=Leaf", &leaf_k, &sub2_k);
+
+        let trusted = vec![root];
+        let err = validate_cert_chain(&leaf, &[sub2, sub], &cfg(&trusted)).unwrap_err();
+        assert!(err.to_string().contains("pathLenConstraint"), "expected pathlen rejection, got: {err}");
+    }
+
+    // pathlen:0 still permits issuing an end-entity leaf directly (no over-restriction).
+    #[test]
+    fn pathlen_zero_allows_direct_leaf() {
+        let mut rng = rand::thread_rng();
+        let (root_k, sub_k, leaf_k) = (
+            SigningKey::random(&mut rng),
+            SigningKey::random(&mut rng),
+            SigningKey::random(&mut rng),
+        );
+        let root = gen_cert(Profile::Root, "CN=Test Root", &root_k, &root_k);
+        let sub = gen_cert(
+            Profile::SubCA { issuer: Name::from_str("CN=Test Root").unwrap(), path_len_constraint: Some(0) },
+            "CN=SubCA0", &sub_k, &root_k,
+        );
+        let leaf = gen_cert(leaf_profile("CN=SubCA0"), "CN=Leaf", &leaf_k, &sub_k);
+
+        let trusted = vec![root];
+        validate_cert_chain(&leaf, &[sub], &cfg(&trusted)).expect("pathlen:0 sub-CA may still issue a leaf");
+    }
 }
