@@ -178,6 +178,22 @@ fn cert_is_ca(cert: &Certificate) -> bool {
     false
 }
 
+/// Returns the BasicConstraints `pathLenConstraint` of `cert`, if present.
+/// `None` means no path-length limit is imposed by this certificate.
+fn ca_path_len_constraint(cert: &Certificate) -> Option<u8> {
+    use x509_cert::ext::pkix::BasicConstraints;
+    let bc_oid = der::oid::ObjectIdentifier::new_unwrap("2.5.29.19");
+    let exts = cert.tbs_certificate.extensions.as_ref()?;
+    for ext in exts.iter() {
+        if ext.extn_id == bc_oid {
+            if let Ok(bc) = BasicConstraints::from_der(ext.extn_value.as_bytes()) {
+                return bc.path_len_constraint;
+            }
+        }
+    }
+    None
+}
+
 /// Build a chain from the leaf to a trusted root and verify signatures along the way.
 fn build_and_verify_chain(
     leaf: &Certificate,
@@ -234,6 +250,14 @@ fn build_and_verify_chain(
                 if verify_cert_signature(&current, &tc.tbs_certificate.subject_public_key_info)
                     .is_ok()
                 {
+                    // Enforce the issuer's pathLenConstraint, if any.
+                    if let Some(maxlen) = ca_path_len_constraint(tc) {
+                        if visited.len() - 1 > maxlen as usize {
+                            return Err(Error::Certificate(
+                                "certificate chain violates pathLenConstraint".into(),
+                            ));
+                        }
+                    }
                     // Check time validity of the trusted cert too
                     if !config.skip_time_checks {
                         if let Ok(verif_time) = resolve_verification_time(config.verification_time)
@@ -271,6 +295,15 @@ fn build_and_verify_chain(
                     if !cert_is_ca(ic) {
                         rejected_non_ca = true;
                         continue;
+                    }
+                    // Enforce the intermediate's pathLenConstraint, if any: at most
+                    // `maxlen` intermediate certs may appear below it in the path.
+                    if let Some(maxlen) = ca_path_len_constraint(ic) {
+                        if visited.len() - 1 > maxlen as usize {
+                            return Err(Error::Certificate(
+                                "certificate chain violates pathLenConstraint".into(),
+                            ));
+                        }
                     }
                     // Check time validity
                     if !config.skip_time_checks {
@@ -631,5 +664,51 @@ mod tests {
         let leaf = std::fs::read(format!("{base}/nemain.der")).unwrap();
         assert!(cert_is_ca(&Certificate::from_der(&ca).unwrap()));
         assert!(!cert_is_ca(&Certificate::from_der(&leaf).unwrap()));
+    }
+
+    // A pathLenConstraint that is exceeded by an extra intermediate is rejected.
+    #[test]
+    fn pathlen_exceeded_is_rejected() {
+        let mut rng = rand::thread_rng();
+        let (root_k, sub_k, sub2_k, leaf_k) = (
+            SigningKey::random(&mut rng),
+            SigningKey::random(&mut rng),
+            SigningKey::random(&mut rng),
+            SigningKey::random(&mut rng),
+        );
+        let root = gen_cert(Profile::Root, "CN=Test Root", &root_k, &root_k);
+        let sub = gen_cert(
+            Profile::SubCA { issuer: Name::from_str("CN=Test Root").unwrap(), path_len_constraint: Some(0) },
+            "CN=SubCA0", &sub_k, &root_k,
+        );
+        let sub2 = gen_cert(
+            Profile::SubCA { issuer: Name::from_str("CN=SubCA0").unwrap(), path_len_constraint: None },
+            "CN=SubCA2", &sub2_k, &sub_k,
+        );
+        let leaf = gen_cert(leaf_profile("CN=SubCA2"), "CN=Leaf", &leaf_k, &sub2_k);
+
+        let trusted = vec![root];
+        let err = validate_cert_chain(&leaf, &[sub2, sub], &cfg(&trusted)).unwrap_err();
+        assert!(err.to_string().contains("pathLenConstraint"), "expected pathlen rejection, got: {err}");
+    }
+
+    // pathlen:0 still permits issuing an end-entity leaf directly (no over-restriction).
+    #[test]
+    fn pathlen_zero_allows_direct_leaf() {
+        let mut rng = rand::thread_rng();
+        let (root_k, sub_k, leaf_k) = (
+            SigningKey::random(&mut rng),
+            SigningKey::random(&mut rng),
+            SigningKey::random(&mut rng),
+        );
+        let root = gen_cert(Profile::Root, "CN=Test Root", &root_k, &root_k);
+        let sub = gen_cert(
+            Profile::SubCA { issuer: Name::from_str("CN=Test Root").unwrap(), path_len_constraint: Some(0) },
+            "CN=SubCA0", &sub_k, &root_k,
+        );
+        let leaf = gen_cert(leaf_profile("CN=SubCA0"), "CN=Leaf", &leaf_k, &sub_k);
+
+        let trusted = vec![root];
+        validate_cert_chain(&leaf, &[sub], &cfg(&trusted)).expect("pathlen:0 sub-CA may still issue a leaf");
     }
 }
