@@ -322,6 +322,12 @@ fn verify_cert_signature(
     const ECDSA_SHA384: &str = "1.2.840.10045.4.3.3";
     const ECDSA_SHA512: &str = "1.2.840.10045.4.3.4";
 
+    // DSA algorithms
+    // id-dsa-with-sha1: 1.2.840.10040.4.3
+    // dsa-with-SHA256:  2.16.840.1.101.3.4.3.2
+    const DSA_SHA1: &str = "1.2.840.10040.4.3";
+    const DSA_SHA256: &str = "2.16.840.1.101.3.4.3.2";
+
     let oid_str = sig_alg_oid.to_string();
 
     match oid_str.as_str() {
@@ -334,10 +340,36 @@ fn verify_cert_signature(
         ECDSA_SHA1 | ECDSA_SHA256 | ECDSA_SHA384 | ECDSA_SHA512 => {
             verify_ecdsa_signature_auto_curve(&spki_der, &tbs_der, sig_bytes, issuer_spki)
         }
+        DSA_SHA1 => verify_dsa_signature::<sha1::Sha1>(&spki_der, &tbs_der, sig_bytes),
+        DSA_SHA256 => verify_dsa_signature::<sha2::Sha256>(&spki_der, &tbs_der, sig_bytes),
         _ => Err(Error::Certificate(format!(
             "unsupported signature algorithm: {oid_str}"
         ))),
     }
+}
+
+/// Verify a DSA (DSS) certificate signature.
+///
+/// The signature bytes are the DER-encoded `Dss-Sig-Value ::= SEQUENCE { r, s }`
+/// and `D` is the message digest (SHA-1 or SHA-256) named by the algorithm OID.
+fn verify_dsa_signature<D>(
+    issuer_spki_der: &[u8],
+    tbs_der: &[u8],
+    signature: &[u8],
+) -> Result<(), Error>
+where
+    D: digest::Digest,
+{
+    use signature::DigestVerifier;
+
+    let spki_ref = spki::SubjectPublicKeyInfoRef::from_der(issuer_spki_der)
+        .map_err(|e| Error::Certificate(format!("invalid issuer DSA SPKI: {e}")))?;
+    let vk = dsa::VerifyingKey::try_from(spki_ref)
+        .map_err(|e| Error::Certificate(format!("invalid DSA public key: {e}")))?;
+    let sig = dsa::Signature::try_from(signature)
+        .map_err(|e| Error::Certificate(format!("invalid DSA signature: {e}")))?;
+    vk.verify_digest(D::new_with_prefix(tbs_der), &sig)
+        .map_err(|_| Error::Certificate("certificate signature verification failed".into()))
 }
 
 /// Verify an RSA PKCS#1 v1.5 signature.
@@ -500,4 +532,57 @@ fn check_crls(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The merlin PKI is dsaWithSHA1: `badb` is a leaf issued directly by `ca`.
+    const MERLIN_CERTS: &str = "../../test-data/merlin-xmldsig-twenty-three/certs";
+
+    fn der(name: &str) -> Option<Vec<u8>> {
+        std::fs::read(std::path::Path::new(MERLIN_CERTS).join(name)).ok()
+    }
+
+    #[test]
+    fn test_validate_dsa_cert_chain_accepts_dsa_signed_chain() {
+        // A dsaWithSHA1 leaf must validate against its DSA CA (DSA cert
+        // signatures, in addition to RSA and ECDSA).
+        let (leaf, ca) = match (der("badb.der"), der("ca.der")) {
+            (Some(l), Some(c)) => (l, c),
+            _ => return, // skip if test-data missing
+        };
+        let trusted = vec![ca];
+        let config = CertValidationConfig {
+            trusted_certs: &trusted,
+            untrusted_certs: &[],
+            crls: &[],
+            verification_time: None,
+            skip_time_checks: true, // these certs are long expired; isolate the signature check
+        };
+        let r = validate_cert_chain(&leaf, std::slice::from_ref(&leaf), &config);
+        assert!(r.is_ok(), "DSA (dsaWithSHA1) chain must validate, got: {r:?}");
+    }
+
+    #[test]
+    fn test_validate_dsa_cert_chain_rejects_unrelated_anchor() {
+        // The same DSA leaf must NOT validate when only an unrelated cert is trusted.
+        let (leaf, other) = match (der("badb.der"), der("nemain.der")) {
+            (Some(l), Some(o)) => (l, o),
+            _ => return,
+        };
+        let trusted = vec![other];
+        let config = CertValidationConfig {
+            trusted_certs: &trusted,
+            untrusted_certs: &[],
+            crls: &[],
+            verification_time: None,
+            skip_time_checks: true,
+        };
+        assert!(
+            validate_cert_chain(&leaf, std::slice::from_ref(&leaf), &config).is_err(),
+            "DSA leaf must not validate against an unrelated trust anchor"
+        );
+    }
 }
