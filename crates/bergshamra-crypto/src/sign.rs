@@ -860,6 +860,25 @@ impl SignatureAlgorithm for HmacSign {
             return Err(Error::Key("HMAC key required".into()));
         };
         let expected = compute_hmac(self.hash, key_bytes, data);
+        // Defense-in-depth against HMAC truncation forgery (CVE-2009-0217).
+        //
+        // `constant_time_eq` only compares the first `sig_bytes.len()` bytes, so
+        // on its own this would happily accept a 1-byte tag — forgeable in ~256
+        // tries. The real HMACOutputLength policy lives in bergshamra-dsig and is
+        // opt-in by design (`DsigContext::hmac_min_out_len` defaults to 0, to match
+        // xmlsec). Since that default is deliberately permissive, we add a cheap
+        // absolute floor right here so the primitive is never trivially forgeable
+        // by itself: reject anything below 40 bits — the shortest truncation the
+        // W3C/xmlsec interop corpus actually uses — which costs zero compatibility.
+        // Deployments that need a stricter minimum still set `hmac_min_out_len`.
+        const MIN_HMAC_TAG_BYTES: usize = 5; // 40 bits
+        if sig_bytes.len() < MIN_HMAC_TAG_BYTES {
+            return Err(Error::Crypto(format!(
+                "HMAC tag too short: {} byte(s); minimum is {} (40 bits) to resist truncation forgery (CVE-2009-0217)",
+                sig_bytes.len(),
+                MIN_HMAC_TAG_BYTES
+            )));
+        }
         Ok(constant_time_eq(&expected, sig_bytes))
     }
 }
@@ -1383,5 +1402,34 @@ mod tests {
             64,
             "Ed25519 signature should be exactly 64 bytes"
         );
+    }
+
+    // ── HMAC verify / truncation (CVE-2009-0217) ─────────────────────
+
+    #[test]
+    fn test_hmac_sha256_verify_and_legit_truncation() {
+        let algo = from_uri_with_context(algorithm::HMAC_SHA256, None).unwrap();
+        let key = super::SigningKey::Hmac(b"secret".to_vec());
+        let data = b"authenticated message";
+        let tag = algo.sign(&key, data).unwrap();
+        assert_eq!(tag.len(), 32);
+        // Full tag verifies, and a correct truncation at/above the 40-bit floor
+        // still verifies (legitimate HMACOutputLength), while a wrong tag fails.
+        assert!(algo.verify(&key, data, &tag).unwrap());
+        assert!(algo.verify(&key, data, &tag[..5]).unwrap());
+        let mut bad = tag.clone();
+        bad[0] ^= 0xff;
+        assert!(!algo.verify(&key, data, &bad).unwrap());
+    }
+
+    #[test]
+    fn test_hmac_short_tag_rejected() {
+        // Tags below 40 bits are rejected outright (CVE-2009-0217).
+        let algo = from_uri_with_context(algorithm::HMAC_SHA256, None).unwrap();
+        let key = super::SigningKey::Hmac(b"secret".to_vec());
+        let data = b"authenticated message";
+        let tag = algo.sign(&key, data).unwrap();
+        assert!(algo.verify(&key, data, &tag[..1]).is_err());
+        assert!(algo.verify(&key, data, &tag[..4]).is_err());
     }
 }
