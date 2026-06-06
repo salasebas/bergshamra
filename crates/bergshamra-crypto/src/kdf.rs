@@ -3,7 +3,7 @@
 //! Key Derivation Functions: ConcatKDF (NIST SP 800-56A), PBKDF2, and HKDF (RFC 5869).
 
 use bergshamra_core::{algorithm, Error};
-use digest::Digest;
+use kryptering::algorithm::HashAlgorithm;
 
 /// ConcatKDF parameters from XML.
 #[derive(Debug, Clone, Default)]
@@ -31,137 +31,6 @@ pub struct Pbkdf2Params {
     pub key_length: usize,
 }
 
-/// Derive a key using ConcatKDF (NIST SP 800-56A, Section 5.8.1).
-///
-/// The single-step KDF:
-///   K(i) = H(counter || Z || OtherInfo)
-///   DerivedKeyingMaterial = K(1) || K(2) || ... (truncated to key_len)
-///
-/// OtherInfo = AlgorithmID || PartyUInfo || PartyVInfo
-/// (SuppPubInfo/SuppPrivInfo not used per W3C XML Enc 1.1 spec)
-pub fn concat_kdf(
-    shared_secret: &[u8],
-    key_len: usize,
-    params: &ConcatKdfParams,
-) -> Result<Vec<u8>, Error> {
-    let digest_uri = params.digest_uri.as_deref().unwrap_or(algorithm::SHA256);
-
-    // Build OtherInfo per W3C XML Enc 1.1 spec:
-    // OtherInfo = AlgorithmID || PartyUInfo || PartyVInfo
-    // Note: SuppPubInfo and SuppPrivInfo are NOT used per the W3C spec.
-    let mut other_info = Vec::new();
-    if let Some(ref alg_id) = params.algorithm_id {
-        other_info.extend_from_slice(alg_id);
-    }
-    if let Some(ref party_u) = params.party_u_info {
-        other_info.extend_from_slice(party_u);
-    }
-    if let Some(ref party_v) = params.party_v_info {
-        other_info.extend_from_slice(party_v);
-    }
-
-    // Dispatch by digest
-    match digest_uri {
-        algorithm::SHA1 => concat_kdf_inner::<sha1::Sha1>(shared_secret, &other_info, key_len),
-        algorithm::SHA224 => concat_kdf_inner::<sha2::Sha224>(shared_secret, &other_info, key_len),
-        algorithm::SHA256 => concat_kdf_inner::<sha2::Sha256>(shared_secret, &other_info, key_len),
-        algorithm::SHA384 => concat_kdf_inner::<sha2::Sha384>(shared_secret, &other_info, key_len),
-        algorithm::SHA512 => concat_kdf_inner::<sha2::Sha512>(shared_secret, &other_info, key_len),
-        algorithm::SHA3_224 => {
-            concat_kdf_inner::<sha3::Sha3_224>(shared_secret, &other_info, key_len)
-        }
-        algorithm::SHA3_256 => {
-            concat_kdf_inner::<sha3::Sha3_256>(shared_secret, &other_info, key_len)
-        }
-        algorithm::SHA3_384 => {
-            concat_kdf_inner::<sha3::Sha3_384>(shared_secret, &other_info, key_len)
-        }
-        algorithm::SHA3_512 => {
-            concat_kdf_inner::<sha3::Sha3_512>(shared_secret, &other_info, key_len)
-        }
-        _ => Err(Error::UnsupportedAlgorithm(format!(
-            "ConcatKDF digest: {digest_uri}"
-        ))),
-    }
-}
-
-fn concat_kdf_inner<H: Digest + Clone>(
-    shared_secret: &[u8],
-    other_info: &[u8],
-    key_len: usize,
-) -> Result<Vec<u8>, Error> {
-    let hash_len = <H as Digest>::output_size();
-    let reps = key_len.div_ceil(hash_len);
-    let mut derived = Vec::with_capacity(reps * hash_len);
-
-    for counter in 1..=(reps as u32) {
-        let mut hasher = H::new();
-        hasher.update(counter.to_be_bytes());
-        hasher.update(shared_secret);
-        hasher.update(other_info);
-        derived.extend_from_slice(&hasher.finalize());
-    }
-
-    derived.truncate(key_len);
-    Ok(derived)
-}
-
-/// Derive a key using PBKDF2 (RFC 8018).
-pub fn pbkdf2_derive(password: &[u8], params: &Pbkdf2Params) -> Result<Vec<u8>, Error> {
-    let mut derived = vec![0u8; params.key_length];
-
-    match params.prf_uri.as_str() {
-        algorithm::HMAC_SHA1 => {
-            pbkdf2::pbkdf2_hmac::<sha1::Sha1>(
-                password,
-                &params.salt,
-                params.iteration_count,
-                &mut derived,
-            );
-        }
-        algorithm::HMAC_SHA224 => {
-            pbkdf2::pbkdf2_hmac::<sha2::Sha224>(
-                password,
-                &params.salt,
-                params.iteration_count,
-                &mut derived,
-            );
-        }
-        algorithm::HMAC_SHA256 => {
-            pbkdf2::pbkdf2_hmac::<sha2::Sha256>(
-                password,
-                &params.salt,
-                params.iteration_count,
-                &mut derived,
-            );
-        }
-        algorithm::HMAC_SHA384 => {
-            pbkdf2::pbkdf2_hmac::<sha2::Sha384>(
-                password,
-                &params.salt,
-                params.iteration_count,
-                &mut derived,
-            );
-        }
-        algorithm::HMAC_SHA512 => {
-            pbkdf2::pbkdf2_hmac::<sha2::Sha512>(
-                password,
-                &params.salt,
-                params.iteration_count,
-                &mut derived,
-            );
-        }
-        _ => {
-            return Err(Error::UnsupportedAlgorithm(format!(
-                "PBKDF2 PRF: {}",
-                params.prf_uri
-            )))
-        }
-    }
-
-    Ok(derived)
-}
-
 /// HKDF parameters from XML (RFC 5869).
 #[derive(Debug, Clone, Default)]
 pub struct HkdfParams {
@@ -176,68 +45,91 @@ pub struct HkdfParams {
     pub key_length_bits: u32,
 }
 
+/// Map an XML digest URI to `kryptering::HashAlgorithm`.
+fn digest_uri_to_hash(uri: &str) -> Result<HashAlgorithm, Error> {
+    match uri {
+        algorithm::SHA1 => Ok(HashAlgorithm::Sha1),
+        algorithm::SHA224 => Ok(HashAlgorithm::Sha224),
+        algorithm::SHA256 => Ok(HashAlgorithm::Sha256),
+        algorithm::SHA384 => Ok(HashAlgorithm::Sha384),
+        algorithm::SHA512 => Ok(HashAlgorithm::Sha512),
+        algorithm::SHA3_224 => Ok(HashAlgorithm::Sha3_224),
+        algorithm::SHA3_256 => Ok(HashAlgorithm::Sha3_256),
+        algorithm::SHA3_384 => Ok(HashAlgorithm::Sha3_384),
+        algorithm::SHA3_512 => Ok(HashAlgorithm::Sha3_512),
+        _ => Err(Error::UnsupportedAlgorithm(format!(
+            "digest algorithm: {uri}"
+        ))),
+    }
+}
+
+/// Map an XML HMAC PRF URI to `kryptering::HashAlgorithm`.
+fn prf_uri_to_hash(uri: &str) -> Result<HashAlgorithm, Error> {
+    match uri {
+        algorithm::HMAC_SHA1 => Ok(HashAlgorithm::Sha1),
+        algorithm::HMAC_SHA224 => Ok(HashAlgorithm::Sha224),
+        algorithm::HMAC_SHA256 => Ok(HashAlgorithm::Sha256),
+        algorithm::HMAC_SHA384 => Ok(HashAlgorithm::Sha384),
+        algorithm::HMAC_SHA512 => Ok(HashAlgorithm::Sha512),
+        _ => Err(Error::UnsupportedAlgorithm(format!("PRF: {uri}"))),
+    }
+}
+
+/// Derive a key using ConcatKDF (NIST SP 800-56A, Section 5.8.1).
+pub fn concat_kdf(
+    shared_secret: &[u8],
+    key_len: usize,
+    params: &ConcatKdfParams,
+) -> Result<Vec<u8>, Error> {
+    let digest_uri = params.digest_uri.as_deref().unwrap_or(algorithm::SHA256);
+    let hash = digest_uri_to_hash(digest_uri)
+        .map_err(|_| Error::UnsupportedAlgorithm(format!("ConcatKDF digest: {digest_uri}")))?;
+
+    let k_params = kryptering::kdf::ConcatKdfParams {
+        hash,
+        algorithm_id: params.algorithm_id.clone(),
+        party_u_info: params.party_u_info.clone(),
+        party_v_info: params.party_v_info.clone(),
+    };
+
+    kryptering::kdf::concat_kdf(shared_secret, key_len, &k_params)
+        .map_err(crate::map_kryptering_err)
+}
+
+/// Derive a key using PBKDF2 (RFC 8018).
+pub fn pbkdf2_derive(password: &[u8], params: &Pbkdf2Params) -> Result<Vec<u8>, Error> {
+    let hash = prf_uri_to_hash(&params.prf_uri)
+        .map_err(|_| Error::UnsupportedAlgorithm(format!("PBKDF2 PRF: {}", params.prf_uri)))?;
+
+    let k_params = kryptering::kdf::Pbkdf2Params {
+        hash,
+        salt: params.salt.clone(),
+        iteration_count: params.iteration_count,
+        key_length: params.key_length,
+    };
+
+    kryptering::kdf::pbkdf2_derive(password, &k_params).map_err(crate::map_kryptering_err)
+}
+
 /// Derive a key using HKDF (RFC 5869: Extract-then-Expand).
-///
-/// `shared_secret` is the input keying material (IKM).
-/// `key_len` is the desired output length in bytes (overridden by
-/// `params.key_length_bits / 8` if that is nonzero).
 pub fn hkdf_derive(
     shared_secret: &[u8],
     key_len: usize,
     params: &HkdfParams,
 ) -> Result<Vec<u8>, Error> {
     let prf_uri = params.prf_uri.as_deref().unwrap_or(algorithm::HMAC_SHA256);
+    let hash = prf_uri_to_hash(prf_uri)
+        .map_err(|_| Error::UnsupportedAlgorithm(format!("HKDF PRF: {prf_uri}")))?;
 
-    // Determine output length: params override the caller's key_len
-    let out_len = if params.key_length_bits > 0 {
-        (params.key_length_bits as usize) / 8
-    } else if key_len > 0 {
-        key_len
-    } else {
-        16 // Default 128 bits (AES-128)
+    let k_params = kryptering::kdf::HkdfParams {
+        hash,
+        salt: params.salt.clone(),
+        info: params.info.clone(),
+        key_length_bits: params.key_length_bits,
     };
 
-    let salt = params.salt.as_deref();
-    let info = params.info.as_deref().unwrap_or(&[]);
-
-    match prf_uri {
-        algorithm::HMAC_SHA1 => {
-            let hk = hkdf::Hkdf::<sha1::Sha1>::new(salt, shared_secret);
-            let mut okm = vec![0u8; out_len];
-            hk.expand(info, &mut okm)
-                .map_err(|e| Error::Crypto(format!("HKDF expand failed: {e}")))?;
-            Ok(okm)
-        }
-        algorithm::HMAC_SHA224 => {
-            let hk = hkdf::Hkdf::<sha2::Sha224>::new(salt, shared_secret);
-            let mut okm = vec![0u8; out_len];
-            hk.expand(info, &mut okm)
-                .map_err(|e| Error::Crypto(format!("HKDF expand failed: {e}")))?;
-            Ok(okm)
-        }
-        algorithm::HMAC_SHA256 => {
-            let hk = hkdf::Hkdf::<sha2::Sha256>::new(salt, shared_secret);
-            let mut okm = vec![0u8; out_len];
-            hk.expand(info, &mut okm)
-                .map_err(|e| Error::Crypto(format!("HKDF expand failed: {e}")))?;
-            Ok(okm)
-        }
-        algorithm::HMAC_SHA384 => {
-            let hk = hkdf::Hkdf::<sha2::Sha384>::new(salt, shared_secret);
-            let mut okm = vec![0u8; out_len];
-            hk.expand(info, &mut okm)
-                .map_err(|e| Error::Crypto(format!("HKDF expand failed: {e}")))?;
-            Ok(okm)
-        }
-        algorithm::HMAC_SHA512 => {
-            let hk = hkdf::Hkdf::<sha2::Sha512>::new(salt, shared_secret);
-            let mut okm = vec![0u8; out_len];
-            hk.expand(info, &mut okm)
-                .map_err(|e| Error::Crypto(format!("HKDF expand failed: {e}")))?;
-            Ok(okm)
-        }
-        _ => Err(Error::UnsupportedAlgorithm(format!("HKDF PRF: {prf_uri}"))),
-    }
+    kryptering::kdf::hkdf_derive(shared_secret, key_len, &k_params)
+        .map_err(crate::map_kryptering_err)
 }
 
 #[cfg(test)]

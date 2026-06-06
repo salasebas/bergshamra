@@ -8,6 +8,13 @@ readme.workspace = true
 rust-version.workspace = true
 description = "Key management for Bergshamra XML Security library"
 
+[features]
+default = []
+# Accept weak/legacy digests (MD5/SHA-1/SHA-224) in X.509 certificate-chain
+# verification, for historical XML-DSig interop material. Off by default
+# (strict, fail-closed). See `x509::cert_signature_policy`.
+legacy-algorithms = []
+
 [dependencies]
 bergshamra-core.workspace = true
 bergshamra-crypto.workspace = true
@@ -40,6 +47,7 @@ sha2.workspace = true
 digest.workspace = true
 md-5.workspace = true
 uppsala.workspace = true
+tsp-ltv.workspace = true
 
 [dev-dependencies]
 rand.workspace = true

@@ -143,6 +143,12 @@ fn resolve_decryption_key(
     if let Some(ki_id) = key_info_id {
         // Try all EncryptedKey elements inside KeyInfo -- use the first that succeeds
         let mut last_ek_error = None;
+        // Capture the last DerivedKey error too. Silently swallowing derivation
+        // failures used to fall through to the KeyName lookup below, which
+        // returned the raw master-key bytes and surfaced far downstream as
+        // misleading errors like "expected 32 byte key, got 8" (the underlying
+        // PBKDF2 / ConcatKDF failure stayed invisible).
+        let mut last_derived_error = None;
         for child_id in doc.children(ki_id) {
             let elem = match doc.element(child_id) {
                 Some(e) => e,
@@ -162,8 +168,11 @@ fn resolve_decryption_key(
 
             // Try DerivedKey (ConcatKDF / PBKDF2)
             if child_ns == ns::ENC11 && child_local == ns::node::DERIVED_KEY {
-                if let Ok(key) = resolve_derived_key(ctx, doc, child_id, enc_uri) {
-                    return Ok(key);
+                match resolve_derived_key(ctx, doc, child_id, enc_uri) {
+                    Ok(key) => return Ok(key),
+                    Err(e) => {
+                        last_derived_error = Some(e);
+                    }
                 }
             }
         }
@@ -212,8 +221,14 @@ fn resolve_decryption_key(
             }
         }
 
-        // If we tried EncryptedKey elements but all failed, return the last error
+        // If we tried EncryptedKey elements but all failed, return the last error.
         if let Some(e) = last_ek_error {
+            return Err(e);
+        }
+        // Same for DerivedKey: a structurally-present DerivedKey whose derivation
+        // failed must surface as an error, not cascade into a KeyName fallback
+        // that silently uses the wrong key.
+        if let Some(e) = last_derived_error {
             return Err(e);
         }
     }
@@ -255,47 +270,62 @@ fn decrypt_encrypted_key(
     match enc_uri {
         // RSA key transport
         algorithm::RSA_PKCS1 | algorithm::RSA_OAEP | algorithm::RSA_OAEP_ENC11 => {
-            // Extract OAEP params from EncryptionMethod child elements
-            let oaep_params = read_oaep_params(doc, enc_method_id);
-            let transport =
-                bergshamra_crypto::keytransport::from_uri_with_params(enc_uri, oaep_params)?;
-            // Prefer RSA private key; fall back to first RSA key
-            let rsa_key = ctx
-                .keys_manager
-                .find_rsa_private()
-                .or_else(|| ctx.keys_manager.find_rsa())
-                .ok_or_else(|| Error::Key("no RSA key for EncryptedKey decryption".into()))?;
-            let private_key = rsa_key
-                .rsa_private_key()
-                .ok_or_else(|| Error::Key("RSA private key required for key transport".into()))?;
-            transport.decrypt(private_key, &cipher_bytes)
+            if let Some(ref hsm_decryptor) = ctx.hsm_decryptor {
+                ctx.ensure_hsm_decryptor_matches(enc_uri)?;
+                hsm_decryptor
+                    .decrypt(&cipher_bytes)
+                    .map_err(map_kryptering_err)
+            } else {
+                // Software path
+                let oaep_params = read_oaep_params(doc, enc_method_id);
+                let transport =
+                    bergshamra_crypto::keytransport::from_uri_with_params(enc_uri, oaep_params)?;
+                // Prefer RSA private key; fall back to first RSA key
+                let rsa_key = ctx
+                    .keys_manager
+                    .find_rsa_private()
+                    .or_else(|| ctx.keys_manager.find_rsa())
+                    .ok_or_else(|| Error::Key("no RSA key for EncryptedKey decryption".into()))?;
+                let private_key = rsa_key.rsa_private_key().ok_or_else(|| {
+                    Error::Key("RSA private key required for key transport".into())
+                })?;
+                transport.decrypt(private_key, &cipher_bytes)
+            }
         }
 
         // AES Key Wrap -- select key by expected size, or derive via ECDH-ES
         algorithm::KW_AES128 | algorithm::KW_AES192 | algorithm::KW_AES256 => {
-            let kw = bergshamra_crypto::keywrap::from_uri(enc_uri)?;
-            let expected_kek_size = match enc_uri {
-                algorithm::KW_AES128 => 16,
-                algorithm::KW_AES192 => 24,
-                algorithm::KW_AES256 => 32,
-                _ => 0,
-            };
-            // Try ECDH-ES key agreement first
-            if let Some(kek) =
-                resolve_agreement_method_kek(ctx, doc, enc_key_id, expected_kek_size)?
-            {
-                return kw.unwrap(&kek, &cipher_bytes);
+            if let Some(ref hsm_unwrapper) = ctx.hsm_key_unwrapper {
+                ctx.ensure_hsm_key_unwrapper_matches(enc_uri)?;
+                hsm_unwrapper
+                    .unwrap(&cipher_bytes)
+                    .map_err(map_kryptering_err)
+            } else {
+                // Software path
+                let kw = bergshamra_crypto::keywrap::from_uri(enc_uri)?;
+                let expected_kek_size = match enc_uri {
+                    algorithm::KW_AES128 => 16,
+                    algorithm::KW_AES192 => 24,
+                    algorithm::KW_AES256 => 32,
+                    _ => 0,
+                };
+                // Try ECDH-ES key agreement first
+                if let Some(kek) =
+                    resolve_agreement_method_kek(ctx, doc, enc_key_id, expected_kek_size)?
+                {
+                    return kw.unwrap(&kek, &cipher_bytes);
+                }
+                // Fall back to named/static AES key
+                let aes_key = ctx
+                    .keys_manager
+                    .find_aes_by_size(expected_kek_size)
+                    .or_else(|| ctx.keys_manager.find_aes())
+                    .ok_or_else(|| Error::Key("no AES key for key unwrap".into()))?;
+                let kek_bytes = aes_key
+                    .symmetric_key_bytes()
+                    .ok_or_else(|| Error::Key("AES key has no bytes".into()))?;
+                kw.unwrap(kek_bytes, &cipher_bytes)
             }
-            // Fall back to named/static AES key
-            let aes_key = ctx
-                .keys_manager
-                .find_aes_by_size(expected_kek_size)
-                .or_else(|| ctx.keys_manager.find_aes())
-                .ok_or_else(|| Error::Key("no AES key for key unwrap".into()))?;
-            let kek_bytes = aes_key
-                .symmetric_key_bytes()
-                .ok_or_else(|| Error::Key("AES key has no bytes".into()))?;
-            kw.unwrap(kek_bytes, &cipher_bytes)
         }
 
         // 3DES Key Wrap
@@ -1656,6 +1686,17 @@ fn build_id_map(doc: &Document<'_>, attr_names: &[&str]) -> HashMap<String, Node
         }
     }
     map
+}
+
+/// Convert a `kryptering::Error` to a `bergshamra_core::Error`.
+fn map_kryptering_err(e: kryptering::Error) -> Error {
+    match e {
+        kryptering::Error::Crypto(s) => Error::Crypto(s),
+        kryptering::Error::UnsupportedAlgorithm(s) => Error::UnsupportedAlgorithm(s),
+        kryptering::Error::Key(s) => Error::Key(s),
+        kryptering::Error::Io(e) => Error::Io(e),
+        kryptering::Error::Pkcs11(s) => Error::Crypto(format!("PKCS#11: {s}")),
+    }
 }
 
 #[cfg(test)]

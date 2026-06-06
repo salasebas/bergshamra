@@ -65,6 +65,31 @@ pub trait SignatureAlgorithm: Send {
     fn uri(&self) -> &'static str;
     fn sign(&self, key: &SigningKey, data: &[u8]) -> Result<Vec<u8>, Error>;
     fn verify(&self, key: &SigningKey, data: &[u8], signature: &[u8]) -> Result<bool, Error>;
+
+    /// Verify a signature that the verifier has pre-declared to be
+    /// truncated to `expected_len_bytes` bytes.
+    ///
+    /// The caller MUST enforce its protocol's policy minimum on
+    /// `expected_len_bytes` before invoking this method. For XML
+    /// Signature that means applying the CVE-2009-0217 floor (80 bits
+    /// unless the caller has explicit reason to accept less) — this
+    /// method does not enforce a minimum itself.
+    ///
+    /// Default impl requires `signature.len() == expected_len_bytes`
+    /// and delegates to [`SignatureAlgorithm::verify`]. Algorithms that
+    /// support verifier-declared truncation (currently HMAC) override this.
+    fn verify_truncated(
+        &self,
+        key: &SigningKey,
+        data: &[u8],
+        signature: &[u8],
+        expected_len_bytes: usize,
+    ) -> Result<bool, Error> {
+        if signature.len() != expected_len_bytes {
+            return Ok(false);
+        }
+        self.verify(key, data, signature)
+    }
 }
 
 /// Create a signature algorithm from its URI (no context string).
@@ -304,6 +329,83 @@ enum HashType {
     Ripemd160,
 }
 
+/// Map `HashType` to `kryptering::HashAlgorithm`.
+fn hash_to_kryptering(h: HashType) -> kryptering::HashAlgorithm {
+    match h {
+        HashType::Sha1 => kryptering::HashAlgorithm::Sha1,
+        HashType::Sha224 => kryptering::HashAlgorithm::Sha224,
+        HashType::Sha256 => kryptering::HashAlgorithm::Sha256,
+        HashType::Sha384 => kryptering::HashAlgorithm::Sha384,
+        HashType::Sha512 => kryptering::HashAlgorithm::Sha512,
+        HashType::Sha3_224 => kryptering::HashAlgorithm::Sha3_224,
+        HashType::Sha3_256 => kryptering::HashAlgorithm::Sha3_256,
+        HashType::Sha3_384 => kryptering::HashAlgorithm::Sha3_384,
+        HashType::Sha3_512 => kryptering::HashAlgorithm::Sha3_512,
+        #[cfg(feature = "legacy-algorithms")]
+        HashType::Md5 => kryptering::HashAlgorithm::Md5,
+        #[cfg(feature = "legacy-algorithms")]
+        HashType::Ripemd160 => kryptering::HashAlgorithm::Ripemd160,
+    }
+}
+
+/// The canonical XML-DSig `SignatureMethod` URI for a [`kryptering::SignatureAlgorithm`].
+///
+/// Returns `None` for algorithm/hash combinations that have no W3C/xmlsec URI
+/// (e.g. RSA-PKCS#1 with a SHA-3 hash). Used to cross-check an HSM signer's or
+/// verifier's declared algorithm against the `<SignatureMethod>` URI in the XML
+/// template, so a signed document can never claim an algorithm different from
+/// the one actually used.
+pub fn kryptering_algorithm_uri(alg: kryptering::SignatureAlgorithm) -> Option<&'static str> {
+    use kryptering::HashAlgorithm as H;
+    use kryptering::SignatureAlgorithm as S;
+    let uri = match alg {
+        S::RsaPkcs1v15(H::Sha1) => algorithm::RSA_SHA1,
+        S::RsaPkcs1v15(H::Sha224) => algorithm::RSA_SHA224,
+        S::RsaPkcs1v15(H::Sha256) => algorithm::RSA_SHA256,
+        S::RsaPkcs1v15(H::Sha384) => algorithm::RSA_SHA384,
+        S::RsaPkcs1v15(H::Sha512) => algorithm::RSA_SHA512,
+        S::RsaPss(H::Sha1) => algorithm::RSA_PSS_SHA1,
+        S::RsaPss(H::Sha224) => algorithm::RSA_PSS_SHA224,
+        S::RsaPss(H::Sha256) => algorithm::RSA_PSS_SHA256,
+        S::RsaPss(H::Sha384) => algorithm::RSA_PSS_SHA384,
+        S::RsaPss(H::Sha512) => algorithm::RSA_PSS_SHA512,
+        S::RsaPss(H::Sha3_224) => algorithm::RSA_PSS_SHA3_224,
+        S::RsaPss(H::Sha3_256) => algorithm::RSA_PSS_SHA3_256,
+        S::RsaPss(H::Sha3_384) => algorithm::RSA_PSS_SHA3_384,
+        S::RsaPss(H::Sha3_512) => algorithm::RSA_PSS_SHA3_512,
+        S::Ecdsa(_, H::Sha1) => algorithm::ECDSA_SHA1,
+        S::Ecdsa(_, H::Sha224) => algorithm::ECDSA_SHA224,
+        S::Ecdsa(_, H::Sha256) => algorithm::ECDSA_SHA256,
+        S::Ecdsa(_, H::Sha384) => algorithm::ECDSA_SHA384,
+        S::Ecdsa(_, H::Sha512) => algorithm::ECDSA_SHA512,
+        S::Ecdsa(_, H::Sha3_224) => algorithm::ECDSA_SHA3_224,
+        S::Ecdsa(_, H::Sha3_256) => algorithm::ECDSA_SHA3_256,
+        S::Ecdsa(_, H::Sha3_384) => algorithm::ECDSA_SHA3_384,
+        S::Ecdsa(_, H::Sha3_512) => algorithm::ECDSA_SHA3_512,
+        S::Ed25519 => algorithm::EDDSA_ED25519,
+        S::Hmac(H::Sha1) => algorithm::HMAC_SHA1,
+        S::Hmac(H::Sha224) => algorithm::HMAC_SHA224,
+        S::Hmac(H::Sha256) => algorithm::HMAC_SHA256,
+        S::Hmac(H::Sha384) => algorithm::HMAC_SHA384,
+        S::Hmac(H::Sha512) => algorithm::HMAC_SHA512,
+        #[cfg(feature = "legacy-algorithms")]
+        S::Dsa(H::Sha1) => algorithm::DSA_SHA1,
+        #[cfg(feature = "legacy-algorithms")]
+        S::Dsa(H::Sha256) => algorithm::DSA_SHA256,
+        S::MlDsa(kryptering::MlDsaVariant::MlDsa44) => algorithm::ML_DSA_44,
+        S::MlDsa(kryptering::MlDsaVariant::MlDsa65) => algorithm::ML_DSA_65,
+        S::MlDsa(kryptering::MlDsaVariant::MlDsa87) => algorithm::ML_DSA_87,
+        S::SlhDsa(kryptering::SlhDsaVariant::Sha2_128f) => algorithm::SLH_DSA_SHA2_128F,
+        S::SlhDsa(kryptering::SlhDsaVariant::Sha2_128s) => algorithm::SLH_DSA_SHA2_128S,
+        S::SlhDsa(kryptering::SlhDsaVariant::Sha2_192f) => algorithm::SLH_DSA_SHA2_192F,
+        S::SlhDsa(kryptering::SlhDsaVariant::Sha2_192s) => algorithm::SLH_DSA_SHA2_192S,
+        S::SlhDsa(kryptering::SlhDsaVariant::Sha2_256f) => algorithm::SLH_DSA_SHA2_256F,
+        S::SlhDsa(kryptering::SlhDsaVariant::Sha2_256s) => algorithm::SLH_DSA_SHA2_256S,
+        _ => return None,
+    };
+    Some(uri)
+}
+
 // ── RSA PKCS#1 v1.5 ─────────────────────────────────────────────────
 
 struct RsaPkcs1v15 {
@@ -413,7 +515,11 @@ impl SignatureAlgorithm for RsaPss {
         let SigningKey::Rsa(private_key) = key else {
             return Err(Error::Key("RSA private key required for PSS".into()));
         };
-        let mut rng = rand::thread_rng();
+        // `signature 2.2.0` consumes `rand_core 0.6 CryptoRngCore`, which
+        // `getrandom::SysRng` (rand_core 0.10) does not satisfy. `rand::rngs::OsRng`
+        // is the rand-0.8-track equivalent: same OS-entropy syscall per draw, zero
+        // user-space state, fork-safe. See docs/adr/0003-rng-choice.md.
+        let mut rng = rand::rngs::OsRng;
         macro_rules! do_sign {
             ($hasher:ty) => {{
                 let sk = rsa::pss::SigningKey::<$hasher>::new(private_key.clone());
@@ -482,22 +588,7 @@ struct Ecdsa {
 
 /// Compute the digest of `data` using the given HashType.
 fn compute_hash(hash: HashType, data: &[u8]) -> Vec<u8> {
-    use digest::Digest;
-    match hash {
-        HashType::Sha1 => sha1::Sha1::digest(data).to_vec(),
-        HashType::Sha224 => sha2::Sha224::digest(data).to_vec(),
-        HashType::Sha256 => sha2::Sha256::digest(data).to_vec(),
-        HashType::Sha384 => sha2::Sha384::digest(data).to_vec(),
-        HashType::Sha512 => sha2::Sha512::digest(data).to_vec(),
-        HashType::Sha3_224 => sha3::Sha3_224::digest(data).to_vec(),
-        HashType::Sha3_256 => sha3::Sha3_256::digest(data).to_vec(),
-        HashType::Sha3_384 => sha3::Sha3_384::digest(data).to_vec(),
-        HashType::Sha3_512 => sha3::Sha3_512::digest(data).to_vec(),
-        #[cfg(feature = "legacy-algorithms")]
-        HashType::Md5 => md5::Md5::digest(data).to_vec(),
-        #[cfg(feature = "legacy-algorithms")]
-        HashType::Ripemd160 => ripemd::Ripemd160::digest(data).to_vec(),
-    }
+    kryptering::digest::digest(hash_to_kryptering(hash), data)
 }
 
 /// Normalize a raw r||s ECDSA signature where each component may be
@@ -862,53 +953,42 @@ impl SignatureAlgorithm for HmacSign {
         let expected = compute_hmac(self.hash, key_bytes, data);
         Ok(constant_time_eq(&expected, sig_bytes))
     }
+
+    fn verify_truncated(
+        &self,
+        key: &SigningKey,
+        data: &[u8],
+        sig_bytes: &[u8],
+        expected_len_bytes: usize,
+    ) -> Result<bool, Error> {
+        // XML Signature's HMACOutputLength (W3C XML-DSig §6.3.1 /
+        // RFC 4051 §2.3.2) lets a verifier pre-declare that it will
+        // accept only the first N bits of the full MAC. Route the
+        // length-aware compare through kryptering's
+        // `hmac_verify_truncated`, which owns the constant-time prefix
+        // compare against a verifier-declared length. The caller above
+        // (bergshamra-dsig verify.rs) has already validated
+        // `expected_len_bytes` against CVE-2009-0217 policy and
+        // confirmed `sig_bytes.len() == expected_len_bytes`.
+        let SigningKey::Hmac(key_bytes) = key else {
+            return Err(Error::Key("HMAC key required".into()));
+        };
+        Ok(kryptering::digest::hmac_verify_truncated(
+            hash_to_kryptering(self.hash),
+            key_bytes,
+            data,
+            sig_bytes,
+            expected_len_bytes,
+        ))
+    }
 }
 
 fn compute_hmac(hash: HashType, key: &[u8], data: &[u8]) -> Vec<u8> {
-    use hmac::{Hmac, Mac};
-    macro_rules! hmac_compute {
-        ($hasher:ty) => {{
-            let mut mac = <Hmac<$hasher>>::new_from_slice(key).expect("HMAC key");
-            mac.update(data);
-            mac.finalize().into_bytes().to_vec()
-        }};
-    }
-    match hash {
-        HashType::Sha1 => hmac_compute!(sha1::Sha1),
-        HashType::Sha224 => hmac_compute!(sha2::Sha224),
-        HashType::Sha256 => hmac_compute!(sha2::Sha256),
-        HashType::Sha384 => hmac_compute!(sha2::Sha384),
-        HashType::Sha512 => hmac_compute!(sha2::Sha512),
-        HashType::Sha3_224 => hmac_compute!(sha3::Sha3_224),
-        HashType::Sha3_256 => hmac_compute!(sha3::Sha3_256),
-        HashType::Sha3_384 => hmac_compute!(sha3::Sha3_384),
-        HashType::Sha3_512 => hmac_compute!(sha3::Sha3_512),
-        #[cfg(feature = "legacy-algorithms")]
-        HashType::Md5 => hmac_compute!(md5::Md5),
-        #[cfg(feature = "legacy-algorithms")]
-        HashType::Ripemd160 => hmac_compute!(ripemd::Ripemd160),
-    }
+    kryptering::digest::compute_hmac(hash_to_kryptering(hash), key, data)
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if b.is_empty() || a.is_empty() {
-        return false;
-    }
-    if b.len() < a.len() {
-        // Truncated HMAC comparison
-        return a[..b.len()]
-            .iter()
-            .zip(b.iter())
-            .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-            == 0;
-    }
-    if a.len() != b.len() {
-        return false;
-    }
-    a.iter()
-        .zip(b.iter())
-        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-        == 0
+    kryptering::digest::constant_time_eq(a, b)
 }
 
 /// Return the hash output size in bits for an HMAC algorithm URI.
@@ -1069,12 +1149,16 @@ impl SignatureAlgorithm for PqSign {
 /// or just the 32-byte seed (from OpenSSL format, extracted by the loader).
 fn pq_ml_dsa_sign<P>(private_der: &[u8], data: &[u8], context: &[u8]) -> Result<Vec<u8>, Error>
 where
-    P: ml_dsa::MlDsaParams + ml_dsa::KeyGen,
+    P: ml_dsa::MlDsaParams,
     P: pkcs8_pq::spki::AssociatedAlgorithmIdentifier<Params = pkcs8_pq::der::AnyRef<'static>>,
 {
+    // `getrandom::SysRng` is a zero-sized, stateless, fork-safe wrapper over
+    // the OS entropy syscall. `sign_randomized` takes `TryCryptoRng`, so OS
+    // RNG failures surface as `ml_dsa::Error` via the `?` below rather than
+    // panicking. See docs/adr/0003-rng-choice.md.
     let sk = load_ml_dsa_signing_key::<P>(private_der)?;
     let sig = sk
-        .sign_deterministic(data, context)
+        .sign_randomized(data, context, &mut getrandom::SysRng)
         .map_err(|e| Error::Crypto(format!("ML-DSA sign failed: {e}")))?;
     Ok(sig.encode().to_vec())
 }
@@ -1087,7 +1171,7 @@ fn pq_ml_dsa_verify<P>(
     context: &[u8],
 ) -> Result<bool, Error>
 where
-    P: ml_dsa::MlDsaParams + ml_dsa::KeyGen,
+    P: ml_dsa::MlDsaParams,
     P: pkcs8_pq::spki::AssociatedAlgorithmIdentifier<Params = pkcs8_pq::der::AnyRef<'static>>,
 {
     use pkcs8_pq::spki::DecodePublicKey;
@@ -1134,21 +1218,21 @@ where
 }
 
 /// Load an ML-DSA signing key from either PKCS#8 DER or a 32-byte seed.
-fn load_ml_dsa_signing_key<P>(private_der: &[u8]) -> Result<ml_dsa::SigningKey<P>, Error>
+fn load_ml_dsa_signing_key<P>(private_der: &[u8]) -> Result<ml_dsa::ExpandedSigningKey<P>, Error>
 where
-    P: ml_dsa::MlDsaParams + ml_dsa::KeyGen,
+    P: ml_dsa::MlDsaParams,
     P: pkcs8_pq::spki::AssociatedAlgorithmIdentifier<Params = pkcs8_pq::der::AnyRef<'static>>,
 {
     // Try full PKCS#8 DER first (RustCrypto format)
     use pkcs8_pq::DecodePrivateKey;
-    if let Ok(sk) = ml_dsa::SigningKey::<P>::from_pkcs8_der(private_der) {
+    if let Ok(sk) = ml_dsa::ExpandedSigningKey::<P>::from_pkcs8_der(private_der) {
         return Ok(sk);
     }
     // Fall back to 32-byte seed (from OpenSSL format, extracted by loader)
     if private_der.len() == 32 {
         let seed = ml_dsa::Seed::try_from(private_der)
             .map_err(|_| Error::Key("invalid ML-DSA seed length".into()))?;
-        return Ok(ml_dsa::SigningKey::<P>::from_seed(&seed));
+        return Ok(ml_dsa::ExpandedSigningKey::<P>::from_seed(&seed));
     }
     Err(Error::Key(format!(
         "failed to parse ML-DSA private key: expected PKCS#8 DER or 32-byte seed, got {} bytes",
@@ -1274,9 +1358,8 @@ mod tests {
         // Verify against tampered data should return Ok(false)
         let verify_key = super::SigningKey::Ed25519Public(vk);
         let result = algo.verify(&verify_key, tampered, &signature);
-        assert_eq!(
-            result.unwrap(),
-            false,
+        assert!(
+            !result.unwrap(),
             "Ed25519 verification of tampered data should return false"
         );
     }
@@ -1305,12 +1388,11 @@ mod tests {
         let verify_key = super::SigningKey::Ed25519Public(vk);
         let result = algo.verify(&verify_key, data, &signature);
         // May return Ok(false) or Err depending on whether the tampered sig is parseable
-        match result {
-            Ok(valid) => assert!(
+        if let Ok(valid) = result {
+            assert!(
                 !valid,
                 "Ed25519 verification of tampered signature should be false"
-            ),
-            Err(_) => {} // Also acceptable — invalid signature bytes
+            );
         }
     }
 

@@ -3,9 +3,9 @@
 //! DSig context — holds keys and configuration for signature operations.
 
 use bergshamra_keys::KeysManager;
+use kryptering::traits::{Signer, Verifier};
 
 /// Context for XML-DSig operations.
-#[derive(Debug)]
 pub struct DsigContext {
     /// Keys manager for key lookup.
     pub keys_manager: KeysManager,
@@ -39,11 +39,79 @@ pub struct DsigContext {
     /// XML Signature Wrapping (XSW) attacks where signed content is moved to an
     /// unexpected position in the document.
     pub strict_verification: bool,
+    /// Optional HSM-backed signer. When set, bypasses KeysManager for signing.
+    pub hsm_signer: Option<Box<dyn Signer>>,
+    /// Optional HSM-backed verifier. When set, bypasses KeysManager for verification.
+    pub hsm_verifier: Option<Box<dyn Verifier>>,
+}
+
+impl std::fmt::Debug for DsigContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Never format `keys_manager` directly: `KeysManager`/`Key` derive
+        // `Debug`, which would print private RSA/EC key material and raw
+        // HMAC/AES bytes into logs and crash reports. Redact to a key count.
+        f.debug_struct("DsigContext")
+            .field(
+                "keys_manager",
+                &format_args!("<{} key(s), redacted>", self.keys_manager.len()),
+            )
+            .field("id_attrs", &self.id_attrs)
+            .field("url_maps", &self.url_maps)
+            .field("hmac_min_out_len", &self.hmac_min_out_len)
+            .field("debug", &self.debug)
+            .field("base_dir", &self.base_dir)
+            .field("insecure", &self.insecure)
+            .field("verify_keys", &self.verify_keys)
+            .field("verification_time", &self.verification_time)
+            .field("skip_time_checks", &self.skip_time_checks)
+            .field("enabled_key_data_x509", &self.enabled_key_data_x509)
+            .field("trusted_keys_only", &self.trusted_keys_only)
+            .field("strict_verification", &self.strict_verification)
+            .field(
+                "hsm_signer",
+                &self.hsm_signer.as_ref().map(|_| "<hsm_signer>"),
+            )
+            .field(
+                "hsm_verifier",
+                &self.hsm_verifier.as_ref().map(|_| "<hsm_verifier>"),
+            )
+            .finish()
+    }
 }
 
 impl DsigContext {
-    /// Create a new DSig context with the given keys manager.
+    /// Create a new DSig context with secure defaults.
+    ///
+    /// The defaults are hardened for federated identity (SAML, WS-Security):
+    /// - **`trusted_keys_only = true`** — reject inline keys from `<KeyInfo>` (KeyValue,
+    ///   X509Certificate, etc.); only use pre-configured keys from the `KeysManager`.
+    /// - **`strict_verification = true`** — reject references to nodes that are not
+    ///   ancestors, siblings, or the document element relative to the `<Signature>`
+    ///   (XSW protection).
+    /// - **`hmac_min_out_len = 160`** — enforce minimum HMAC output length of 160 bits
+    ///   to prevent truncation attacks (CVE-2009-0217).
+    ///
+    /// Use [`new_permissive()`](Self::new_permissive) if you need the W3C XML-DSig
+    /// default behavior (e.g., self-contained signatures with inline keys).
     pub fn new(keys_manager: KeysManager) -> Self {
+        Self {
+            trusted_keys_only: true,
+            strict_verification: true,
+            hmac_min_out_len: 160,
+            ..Self::new_permissive(keys_manager)
+        }
+    }
+
+    /// Create a DSig context with permissive defaults (W3C XML-DSig standard behavior).
+    ///
+    /// This accepts inline keys from `<KeyInfo>`, does not enforce reference positions,
+    /// and does not enforce a minimum HMAC output length. Suitable for document signing
+    /// with self-contained signatures, or when the caller overrides all security-relevant
+    /// fields explicitly.
+    ///
+    /// **For SAML, WS-Security, or any protocol with pre-established key trust, use
+    /// [`new()`](Self::new) instead.**
+    pub fn new_permissive(keys_manager: KeysManager) -> Self {
         Self {
             keys_manager,
             id_attrs: Vec::new(),
@@ -58,6 +126,8 @@ impl DsigContext {
             enabled_key_data_x509: false,
             trusted_keys_only: false,
             strict_verification: false,
+            hsm_signer: None,
+            hsm_verifier: None,
         }
     }
 
@@ -128,6 +198,25 @@ impl DsigContext {
     /// Set base directory for resolving relative URIs (builder style).
     pub fn with_base_dir(mut self, dir: impl Into<String>) -> Self {
         self.base_dir = Some(dir.into());
+        self
+    }
+
+    /// Set an HSM-backed signer (builder style).
+    ///
+    /// When set, signing operations bypass the `KeysManager` and delegate
+    /// to the provided [`kryptering::Signer`] implementation. Key material
+    /// never leaves the HSM.
+    pub fn with_hsm_signer(mut self, signer: Box<dyn kryptering::Signer>) -> Self {
+        self.hsm_signer = Some(signer);
+        self
+    }
+
+    /// Set an HSM-backed verifier (builder style).
+    ///
+    /// When set, signature verification bypasses the `KeysManager` and
+    /// delegates to the provided [`kryptering::Verifier`] implementation.
+    pub fn with_hsm_verifier(mut self, verifier: Box<dyn kryptering::Verifier>) -> Self {
+        self.hsm_verifier = Some(verifier);
         self
     }
 }

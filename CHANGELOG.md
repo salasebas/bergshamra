@@ -1,5 +1,138 @@
 # Changelog
 
+## 0.5.0
+
+### Breaking Changes
+
+#### `DsigContext::new()` is now secure-by-default
+
+`DsigContext::new()` now enables `trusted_keys_only = true`,
+`strict_verification = true`, and `hmac_min_out_len = 160` out of the box,
+hardened for federated identity (SAML, WS-Security). Callers that need the
+previous permissive W3C XML-DSig behavior — inline `<KeyInfo>` keys, no
+reference-position enforcement, no minimum HMAC output length — must switch to
+the new `DsigContext::new_permissive()`.
+
+#### `VerifiedReference` is now `#[non_exhaustive]` and gained `digest_verified`
+
+The public `VerifiedReference` struct has a new `digest_verified: bool` field
+(`false` for `cid:` WS-Security attachment references whose content lives
+outside the XML document). The struct is now `#[non_exhaustive]`, so downstream
+code must construct it via the verifier and match it with `..`; future fields
+will no longer be a breaking change.
+
+### Added
+
+- `DsigContext::new_permissive()` — opt-in W3C-standard (permissive) context.
+- Verifier-declared HMAC truncation (`HMACOutputLength`, W3C XML-DSig §6.3.1)
+  via `SignatureAlgorithm::verify_truncated`, gated by the CVE-2009-0217 policy
+  floor (`hmac_min_out_len`).
+
+### Changed
+
+- Updated `ml-dsa` to `0.1.1`, `slh-dsa` to `0.2.0-rc.5`, and the post-quantum
+  `pkcs8` to the stable `0.11.0` (previously prerelease pins), tracking
+  `kryptering 0.3`.
+- `kryptering` (>=0.3) and `tsp-ltv` (>=0.2) are now resolved from crates.io
+  instead of local `path` / `[patch]` dependencies.
+- ML-DSA signing is now randomized (`sign_randomized`); RSA-PSS and ML-DSA
+  draw from the OS CSPRNG (`OsRng` / `getrandom::SysRng`), and OS RNG failures
+  surface as errors instead of panicking. See `docs/adr/0003-rng-choice.md`.
+- `DsigContext` / `EncContext` `Debug` impls now redact the `KeysManager`
+  (printing only a key count) to avoid leaking private/secret key material into
+  logs and crash reports.
+
+### Fixed
+
+- XML-Enc: `<DerivedKey>` (ConcatKDF / PBKDF2) derivation failures now surface
+  as errors instead of silently falling through to a `KeyName` lookup that used
+  the wrong key bytes (which produced misleading downstream errors).
+
+## 0.4.0
+
+### Breaking Changes
+
+#### `DsigContext` and `EncContext` no longer derive `Debug`
+
+Both context types now contain trait-object fields (`Box<dyn Signer>`, etc.)
+which do not implement `Debug`. Manual `Debug` impls are provided that print
+placeholder strings for HSM fields. Code that relies on `#[derive(Debug)]`
+behavior is unaffected, but generic bounds like `T: Debug` on a type containing
+`DsigContext` may need adjustment.
+
+### Added
+
+#### HSM support via kryptering
+
+`DsigContext` and `EncContext` now accept optional HSM-backed trait objects for
+signing, verification, encryption, and key wrapping. When set, cryptographic
+operations bypass the `KeysManager` and delegate to the HSM — key material
+never leaves the hardware.
+
+**`DsigContext` new fields and builders:**
+- `hsm_signer: Option<Box<dyn kryptering::Signer>>` / `.with_hsm_signer()`
+- `hsm_verifier: Option<Box<dyn kryptering::Verifier>>` / `.with_hsm_verifier()`
+
+**`EncContext` new fields and builders:**
+- `hsm_decryptor: Option<Box<dyn kryptering::Decryptor>>` / `.with_hsm_decryptor()`
+- `hsm_key_unwrapper: Option<Box<dyn kryptering::KeyWrapper>>` / `.with_hsm_key_unwrapper()`
+- `hsm_encryptor: Option<Box<dyn kryptering::Encryptor>>` / `.with_hsm_encryptor()`
+- `hsm_key_wrapper: Option<Box<dyn kryptering::KeyWrapper>>` / `.with_hsm_key_wrapper()`
+
+Example using SoftHSM2 via kryptering's PKCS#11 backend:
+
+```rust
+use kryptering::pkcs11::{Pkcs11Provider, Pkcs11Signer};
+
+let provider = Pkcs11Provider::new(Path::new("/usr/lib/softhsm/libsofthsm2.so"))?;
+let session = provider.open_session("1234")?;
+let signer = Pkcs11Signer::new(&session, "my-rsa-key", SignatureAlgorithm::RsaSha256);
+
+let ctx = DsigContext::new(KeysManager::new())
+    .with_hsm_signer(Box::new(signer));
+
+let signed_xml = sign(&ctx, template_xml)?;
+```
+
+#### Shared crypto backend (kryptering)
+
+`bergshamra-crypto` now delegates cipher, digest, KDF, key agreement, key
+transport, key wrap, and signing operations to the `kryptering` crate. This
+eliminates code duplication across the e-signing family of crates while
+preserving the same XML algorithm URI–based dispatch API. No behavioral changes
+for existing callers.
+
+#### Shared trust infrastructure (tsp-ltv)
+
+X.509 certificate chain validation in `bergshamra-keys` now uses `tsp-ltv`
+for trust store management and chain building. Re-exported as
+`bergshamra_keys::trust` and `bergshamra_keys::tsp_crypto` /
+`bergshamra_keys::tsp_error`.
+
+#### Key introspection methods on `Key`
+
+- `Key::algorithm_name()` — returns the algorithm name (delegates to `KeyData`)
+- `Key::to_spki_der()` — returns SPKI DER encoding if available
+- `Key::to_key_value_xml()` — returns KeyValue XML fragment if available
+- `Key::has_private_key()` — returns whether the key contains private key material
+
+#### HSM integration tests
+
+New `hsm_sign_verify` integration test suite in `bergshamra-dsig` tests signing
+and verification with SoftHSM2 via PKCS#11. Run with:
+
+```bash
+just hsm-setup    # Initialize SoftHSM2 token with test keys
+just test-hsm     # Run HSM integration tests
+```
+
+### Changed
+
+- Made `load_ed25519_private_pkcs8_der()` and `load_ed25519_public_spki_der()` public in `bergshamra-keys::loader`
+- Made `try_load_pq_private_key()` and `try_load_pq_public_key()` public in `bergshamra-keys::loader`
+- Pinned `ml-dsa` to exact version `=0.1.0-rc.7` to prevent breaking pre-release upgrades
+- Added `kryptering` (shared crypto backend) and `tsp-ltv` (shared trust/validation) as workspace dependencies
+
 ## 0.3.1
 
 ### Added

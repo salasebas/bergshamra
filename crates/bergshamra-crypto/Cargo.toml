@@ -14,6 +14,7 @@ legacy-algorithms = ["dep:md-5", "dep:ripemd"]
 
 [dependencies]
 bergshamra-core.workspace = true
+kryptering.workspace = true
 digest.workspace = true
 sha1.workspace = true
 sha2.workspace = true
@@ -26,6 +27,7 @@ ecdsa.workspace = true
 dsa.workspace = true
 ml-dsa.workspace = true
 slh-dsa.workspace = true
+getrandom.workspace = true
 pkcs8-pq.workspace = true
 p256 = { workspace = true, features = ["ecdsa"] }
 p384 = { workspace = true, features = ["ecdsa"] }

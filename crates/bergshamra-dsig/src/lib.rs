@@ -75,40 +75,32 @@
 //! SAML and WS-Security consumers where the document structure is well-known.
 //!
 //! ```rust,ignore
-//! let mut ctx = DsigContext::new(keys_manager);
-//! ctx.strict_verification = true;   // enable XSW protection
-//! ctx.trusted_keys_only = true;     // only trust pre-configured keys
+//! let ctx = DsigContext::new(keys_manager);  // secure defaults: strict + trusted_keys_only
 //! let result = bergshamra_dsig::verify::verify(&ctx, &xml)?;
 //! ```
 //!
-//! The CLI exposes this as `bergshamra verify --strict`.
-//! Combined with `--trusted-keys-only`, this provides robust XSW protection.
+//! The CLI exposes this as `bergshamra verify --strict --trusted-keys-only`.
 //!
-//! ## Trusted Keys Only (opt-in)
+//! ## Secure Defaults (`DsigContext::new`)
 //!
-//! Set [`DsigContext::trusted_keys_only`] to `true` to ignore inline keys
-//! embedded in `<KeyInfo>` (`<KeyValue>`, `<X509Certificate>`, etc.) and only
-//! use keys pre-loaded into the [`KeysManager`](bergshamra_keys::KeysManager).
-//! Without this, an attacker who controls the XML can embed their own key and
-//! sign with it — the signature will verify, but against the wrong key.
+//! [`DsigContext::new()`] enables secure defaults out of the box:
+//! - **`trusted_keys_only = true`** — ignores inline keys in `<KeyInfo>`
+//!   (`<KeyValue>`, `<X509Certificate>`, etc.) and only uses keys from the
+//!   [`KeysManager`](bergshamra_keys::KeysManager). Without this, an attacker
+//!   who controls the XML can embed their own key and forge a valid signature.
+//! - **`strict_verification = true`** — rejects references to nodes that are not
+//!   ancestors, siblings, or the document element (XSW protection).
+//! - **`hmac_min_out_len = 160`** — enforces a minimum HMAC output length of
+//!   160 bits to prevent truncation attacks (CVE-2009-0217).
 //!
-//! This is essential for SAML Service Providers and any deployment where the
-//! signing key is known ahead of time.
-//!
-//! ## HMAC Output Truncation (CVE-2009-0217)
-//!
-//! Set [`DsigContext::hmac_min_out_len`] to enforce a minimum
-//! `<HMACOutputLength>` in bits. A zero-length or very short HMAC is trivially
-//! forgeable. The W3C recommendation is at least 80 bits; xmlsec1 defaults to
-//! half the hash output length.
+//! Use [`DsigContext::new_permissive()`] for W3C XML-DSig standard behavior
+//! (e.g., self-contained signatures with inline keys).
 //!
 //! ## Recommended Configuration for SAML
 //!
 //! ```rust,ignore
+//! // DsigContext::new() already has secure defaults — just add cert validation:
 //! let mut ctx = DsigContext::new(keys_manager);
-//! ctx.trusted_keys_only = true;     // reject inline keys
-//! ctx.strict_verification = true;   // reject unexpected reference positions
-//! // Optionally validate the IdP certificate chain:
 //! ctx.verify_keys = true;
 //! ```
 
@@ -118,3 +110,19 @@ pub mod verify;
 
 pub use context::DsigContext;
 pub use verify::{VerifiedKeyInfo, VerifiedReference, VerifyResult};
+
+/// Convert a [`kryptering::Error`] into a [`bergshamra_core::Error`].
+fn map_kryptering_err(e: kryptering::Error) -> bergshamra_core::Error {
+    match e {
+        kryptering::Error::Crypto(s) => bergshamra_core::Error::Crypto(s),
+        kryptering::Error::UnsupportedAlgorithm(s) => {
+            bergshamra_core::Error::UnsupportedAlgorithm(s)
+        }
+        kryptering::Error::Key(s) => bergshamra_core::Error::Key(s),
+        kryptering::Error::Io(e) => bergshamra_core::Error::Io(e),
+        // Handle additional error variants (e.g., Pkcs11) when the kryptering
+        // crate is compiled with optional features.
+        #[allow(unreachable_patterns)]
+        other => bergshamra_core::Error::Crypto(other.to_string()),
+    }
+}

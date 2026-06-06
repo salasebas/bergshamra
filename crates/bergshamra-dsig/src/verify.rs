@@ -3,12 +3,12 @@
 //! XML-DSig signature verification.
 //!
 //! Processing order per spec Section 3.2:
-//! 1. Parse <Signature>, register ID attributes
-//! 2. Read <SignedInfo>: CanonicalizationMethod, SignatureMethod
-//! 3. For each <Reference>: resolve URI, run transforms, compute digest, compare
-//! 4. Resolve signing key from <KeyInfo>
-//! 5. Canonicalize <SignedInfo>
-//! 6. Verify <SignatureValue>
+//! 1. Parse `<Signature>`, register ID attributes
+//! 2. Read `<SignedInfo>`: CanonicalizationMethod, SignatureMethod
+//! 3. For each `<Reference>`: resolve URI, run transforms, compute digest, compare
+//! 4. Resolve signing key from `<KeyInfo>`
+//! 5. Canonicalize `<SignedInfo>`
+//! 6. Verify `<SignatureValue>`
 
 use crate::context::DsigContext;
 use bergshamra_c14n::C14nMode;
@@ -20,12 +20,24 @@ use std::collections::HashMap;
 use uppsala::{Document, NodeId, NodeKind, XmlWriter};
 
 /// Metadata about a single verified `<Reference>`.
+///
+/// Marked `#[non_exhaustive]`: construct it via the verifier rather than a
+/// struct literal, and match with `..`. This lets future fields be added
+/// without a breaking change for downstream code.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct VerifiedReference {
     /// The URI attribute from the `<Reference>` element.
     pub uri: String,
     /// The resolved target node (if a same-document reference).
     pub resolved_node: Option<NodeId>,
+    /// Whether the digest was actually computed and verified.
+    ///
+    /// This is `false` for `cid:` URI references (WS-Security MIME attachments),
+    /// which are skipped because the referenced content is outside the XML document.
+    /// Callers that process `cid:` references **must** verify attachment digests
+    /// separately.
+    pub digest_verified: bool,
 }
 
 /// Information about the key that was used to verify the signature.
@@ -209,6 +221,93 @@ pub fn verify(ctx: &DsigContext, xml: &str) -> Result<VerifyResult, Error> {
         }
     }
 
+    // 5. Canonicalize <SignedInfo>
+    // We need to canonicalize the SignedInfo element as a document subset
+    let signed_info_ns = NodeSet::tree_without_comments(signed_info, &doc);
+    let c14n_signed_info = bergshamra_c14n::canonicalize_doc(
+        &doc,
+        c14n_mode,
+        Some(&signed_info_ns),
+        &inclusive_prefixes,
+    )?;
+
+    if ctx.debug {
+        eprintln!("== PreSigned data - start buffer:");
+        eprint!("{}", String::from_utf8_lossy(&c14n_signed_info));
+        eprintln!("\n== PreSigned data - end buffer");
+    }
+
+    // 6. Verify SignatureValue
+    let sig_value_node = find_child_element(&doc, sig_node, ns::DSIG, ns::node::SIGNATURE_VALUE)
+        .ok_or_else(|| Error::MissingElement("SignatureValue".into()))?;
+    let sig_value_b64 = element_text(&doc, sig_value_node).unwrap_or("").trim();
+    let sig_value_clean: String = sig_value_b64
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+
+    use base64::Engine;
+    let engine = base64::engine::general_purpose::STANDARD;
+    let sig_value = engine
+        .decode(&sig_value_clean)
+        .map_err(|e| Error::Base64(format!("SignatureValue: {e}")))?;
+
+    // Validate HMAC truncation length against decoded signature
+    if let Some(bits) = hmac_output_length_bits {
+        let expected_bytes = bits / 8;
+        if sig_value.len() != expected_bytes {
+            return Ok(VerifyResult::Invalid {
+                reason: format!(
+                    "SignatureValue length {} bytes does not match HMACOutputLength {} bits ({} bytes)",
+                    sig_value.len(), bits, expected_bytes
+                ),
+            });
+        }
+    }
+
+    // HSM verifier path — key material stays on the HSM.
+    if let Some(ref hsm_verifier) = ctx.hsm_verifier {
+        // Cross-check the verifier's algorithm against the XML <SignatureMethod>
+        // URI. The HSM verifier always verifies with its own configured
+        // algorithm; if that disagrees with what the document declares, a naive
+        // pass would report `Valid` for a signature over an algorithm the XML
+        // never claimed (or silently accept an algorithm-confusion attempt).
+        // Treat a mismatch as an invalid signature rather than a hard error so
+        // callers get a normal verification verdict.
+        let verifier_uri =
+            bergshamra_crypto::sign::kryptering_algorithm_uri(hsm_verifier.algorithm());
+        if verifier_uri != Some(sig_method_uri) {
+            return Ok(VerifyResult::Invalid {
+                reason: format!(
+                    "SignatureMethod {sig_method_uri} does not match HSM verifier algorithm {:?} (URI {})",
+                    hsm_verifier.algorithm(),
+                    verifier_uri.unwrap_or("<unmapped>"),
+                ),
+            });
+        }
+        let valid = hsm_verifier
+            .verify(&c14n_signed_info, &sig_value)
+            .map_err(crate::map_kryptering_err)?;
+
+        return if valid {
+            Ok(VerifyResult::Valid {
+                signature_node: sig_node,
+                references: verified_refs,
+                key_info: VerifiedKeyInfo {
+                    algorithm: format!("{:?}", hsm_verifier.algorithm()),
+                    key_name: None,
+                    x509_chain: Vec::new(),
+                },
+            })
+        } else {
+            Ok(VerifyResult::Invalid {
+                reason: "signature value verification failed (HSM)".into(),
+            })
+        };
+    }
+
+    // Software key path — resolve key from KeyInfo / KeysManager.
+
     // 4. Resolve signing key
     // When trusted_keys_only is set, skip inline key extraction and only use
     // keys from the KeysManager. This is the secure mode for SAML: we only
@@ -324,56 +423,21 @@ pub fn verify(ctx: &DsigContext, xml: &str) -> Result<VerifyResult, Error> {
         }
     }
 
-    // 5. Canonicalize <SignedInfo>
-    // We need to canonicalize the SignedInfo element as a document subset
-    let signed_info_ns = NodeSet::tree_without_comments(signed_info, &doc);
-    let c14n_signed_info = bergshamra_c14n::canonicalize_doc(
-        &doc,
-        c14n_mode,
-        Some(&signed_info_ns),
-        &inclusive_prefixes,
-    )?;
-
-    if ctx.debug {
-        eprintln!("== PreSigned data - start buffer:");
-        eprint!("{}", String::from_utf8_lossy(&c14n_signed_info));
-        eprintln!("\n== PreSigned data - end buffer");
-    }
-
-    // 6. Verify SignatureValue
-    let sig_value_node = find_child_element(&doc, sig_node, ns::DSIG, ns::node::SIGNATURE_VALUE)
-        .ok_or_else(|| Error::MissingElement("SignatureValue".into()))?;
-    let sig_value_b64 = element_text(&doc, sig_value_node).unwrap_or("").trim();
-    let sig_value_clean: String = sig_value_b64
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect();
-
-    use base64::Engine;
-    let engine = base64::engine::general_purpose::STANDARD;
-    let sig_value = engine
-        .decode(&sig_value_clean)
-        .map_err(|e| Error::Base64(format!("SignatureValue: {e}")))?;
-
-    // Validate HMAC truncation length against decoded signature
-    if let Some(bits) = hmac_output_length_bits {
-        let expected_bytes = bits / 8;
-        if sig_value.len() != expected_bytes {
-            return Ok(VerifyResult::Invalid {
-                reason: format!(
-                    "SignatureValue length {} bytes does not match HMACOutputLength {} bits ({} bytes)",
-                    sig_value.len(), bits, expected_bytes
-                ),
-            });
-        }
-    }
-
     let signing_key = key
         .to_signing_key()
         .ok_or_else(|| Error::Key("no signing key available".into()))?;
 
     let sig_alg = bergshamra_crypto::sign::from_uri_with_context(sig_method_uri, pq_context)?;
-    let valid = sig_alg.verify(&signing_key, &c14n_signed_info, &sig_value)?;
+    // When the XML carries an <HMACOutputLength> (parsed earlier and already
+    // checked against the CVE-2009-0217 floor in ctx.hmac_min_out_len), route
+    // through verify_truncated so the signature can be shorter than the
+    // full HMAC. For every other algorithm the default impl reduces to the
+    // usual verify() path.
+    let valid = if let Some(bits) = hmac_output_length_bits {
+        sig_alg.verify_truncated(&signing_key, &c14n_signed_info, &sig_value, bits / 8)?
+    } else {
+        sig_alg.verify(&signing_key, &c14n_signed_info, &sig_value)?
+    };
 
     if valid {
         Ok(VerifyResult::Valid {
@@ -422,6 +486,7 @@ fn verify_reference(
             VerifiedReference {
                 uri: uri.to_owned(),
                 resolved_node: None,
+                digest_verified: false,
             },
         ));
     }
@@ -468,6 +533,7 @@ fn verify_reference(
     let vref = VerifiedReference {
         uri: uri.to_owned(),
         resolved_node,
+        digest_verified: true,
     };
 
     if let Some(transforms) = transforms_node {
@@ -3613,9 +3679,9 @@ mod tests {
             .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()))
     }
 
-    /// Helper: create a default DsigContext (no keys, insecure, no cert validation).
+    /// Helper: create a permissive DsigContext (no keys, insecure, no cert validation).
     fn default_ctx() -> DsigContext {
-        DsigContext::new(bergshamra_keys::KeysManager::new())
+        DsigContext::new_permissive(bergshamra_keys::KeysManager::new())
     }
 
     #[test]
@@ -3712,7 +3778,7 @@ mod tests {
         let key = bergshamra_keys::loader::load_x509_cert_pem(cert_pem.as_bytes())
             .expect("load rootxmlns.crt");
         mgr.add_key(key);
-        let ctx = DsigContext::new(mgr);
+        let ctx = DsigContext::new_permissive(mgr);
         let result = verify(&ctx, &xml).expect("verify should not return Err");
         assert!(
             result.is_valid(),

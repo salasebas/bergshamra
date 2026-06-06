@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref (e.g. re-pushes to a PR branch).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust (fmt + clippy + test, workspace matrix)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      # Build + clippy across every feature combination so conditional
+      # cfg(feature = "…") blocks don't bit-rot. Bergshamra's feature
+      # surface is modest: `bergshamra-crypto` gates MD5/RIPEMD-160 via
+      # `legacy-algorithms`; the top-level `bergshamra` crate re-exports
+      # that gate and enables it by default.
+      - name: cargo clippy (no-default-features)
+        run: cargo clippy --locked --workspace --no-default-features --all-targets -- -D warnings
+
+      - name: cargo clippy (default)
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: cargo clippy (all-features)
+        run: cargo clippy --locked --workspace --all-features --all-targets -- -D warnings
+
+      # Unit tests — pure XML-DSig / XML-Enc / C14N paths. The xmlsec
+      # interop suite (test-data/testDSig.sh via Python shim) is not run
+      # here; it requires xmlsec1 + OpenSSL at runtime and lives under
+      # `tests/` as an integration harness, not a cargo test.
+      - name: cargo test (no-default-features)
+        run: cargo test --locked --workspace --no-default-features --lib
+
+      - name: cargo test (default)
+        run: cargo test --locked --workspace --lib
+
+      - name: cargo test (all-features)
+        run: cargo test --locked --workspace --all-features --lib
+
+      - name: cargo doc
+        run: cargo doc --locked --workspace --all-features --no-deps
+        env:
+          RUSTDOCFLAGS: "-D warnings"

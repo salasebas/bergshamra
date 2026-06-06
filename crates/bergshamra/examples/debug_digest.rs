@@ -31,7 +31,7 @@ fn main() {
         .into_iter()
         .find(|&id| {
             doc.element(id)
-                .map_or(false, |e| e.name.local_name == "Signature")
+                .is_some_and(|e| e.name.local_name == "Signature")
         })
         .expect("no Signature");
     let signed_info = doc
@@ -39,7 +39,7 @@ fn main() {
         .into_iter()
         .find(|&id| {
             doc.element(id)
-                .map_or(false, |e| e.name.local_name == "SignedInfo")
+                .is_some_and(|e| e.name.local_name == "SignedInfo")
         })
         .expect("no SignedInfo");
 
@@ -48,7 +48,7 @@ fn main() {
         .into_iter()
         .filter(|&id| {
             doc.element(id)
-                .map_or(false, |e| e.name.local_name == "Reference")
+                .is_some_and(|e| e.name.local_name == "Reference")
         })
         .collect();
 
@@ -82,7 +82,7 @@ fn main() {
                     .into_iter()
                     .find(|&id| {
                         doc.element(id)
-                            .map_or(false, |e| e.name.local_name == "DigestMethod")
+                            .is_some_and(|e| e.name.local_name == "DigestMethod")
                     })
                     .and_then(|id| doc.element(id).and_then(|e| e.get_attribute("Algorithm")))
                     .unwrap_or("http://www.w3.org/2000/09/xmldsig#sha1");
@@ -97,7 +97,7 @@ fn main() {
                     .into_iter()
                     .find(|&id| {
                         doc.element(id)
-                            .map_or(false, |e| e.name.local_name == "DigestValue")
+                            .is_some_and(|e| e.name.local_name == "DigestValue")
                     })
                     .map(|id| {
                         doc.children(id)
