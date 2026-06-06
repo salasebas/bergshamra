@@ -86,15 +86,6 @@ fn resolve_digest(uri: Option<&str>) -> Result<HashAlgorithm, Error> {
         #[cfg(feature = "legacy-algorithms")]
         Some(algorithm::MD5) => Ok(HashAlgorithm::Md5),
         Some(other) => {
-            #[cfg(feature = "legacy-algorithms")]
-            {
-                if other.contains("ripemd160") {
-                    return Ok(HashAlgorithm::Ripemd160);
-                }
-                if other.contains("md5") {
-                    return Ok(HashAlgorithm::Md5);
-                }
-            }
             // Present-but-unsupported DigestMethod: fail closed.
             Err(Error::UnsupportedAlgorithm(format!(
                 "unsupported OAEP DigestMethod: {other}"
@@ -185,6 +176,13 @@ mod tests {
     fn resolve_digest_defaults_only_when_absent() {
         assert_eq!(resolve_digest(None).unwrap(), HashAlgorithm::Sha1);
         assert!(resolve_digest(Some("urn:test:unsupported-digest")).is_err());
+    }
+
+    #[cfg(feature = "legacy-algorithms")]
+    #[test]
+    fn resolve_digest_rejects_substring_match_uris() {
+        assert!(resolve_digest(Some("urn:test:ripemd160")).is_err());
+        assert!(resolve_digest(Some("urn:test:md5")).is_err());
     }
 
     #[test]
