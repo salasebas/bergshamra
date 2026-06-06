@@ -8,6 +8,11 @@ readme.workspace = true
 rust-version.workspace = true
 description = "XML Digital Signatures for Bergshamra XML Security library"
 
+[features]
+default = []
+# Propagate legacy-algorithm support to the X.509 cert-chain validation path.
+legacy-algorithms = ["bergshamra-keys/legacy-algorithms"]
+
 [dependencies]
 bergshamra-core.workspace = true
 bergshamra-xml.workspace = true

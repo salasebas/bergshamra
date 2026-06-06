@@ -10,8 +10,29 @@
 
 use bergshamra_core::Error;
 use der::Decode;
-use tsp_ltv::trust::{build_chain_from_pool, trust_anchor_subjects, TrustStore};
+use tsp_ltv::crypto::verify::SignaturePolicy;
+use tsp_ltv::trust::{build_chain_from_pool_with_policy, trust_anchor_subjects, TrustStore};
 use x509_cert::Certificate;
+
+/// The signature-algorithm policy applied to certificate-chain verification.
+///
+/// When bergshamra is built with the `legacy-algorithms` feature, certificate
+/// signatures over weak/deprecated digests (MD5/SHA-1/SHA-224) are accepted so
+/// historical XML-DSig interop material (the merlin/phaos/aleksey/xmldsig11 test
+/// corpora, all SHA-1-era) validates. Without that feature the strict,
+/// fail-closed tsp-ltv default is used and weak-digest certificate chains are
+/// rejected. This mirrors how bergshamra already gates legacy digest/signature
+/// support elsewhere behind the same feature.
+fn cert_signature_policy() -> SignaturePolicy {
+    #[cfg(feature = "legacy-algorithms")]
+    {
+        SignaturePolicy::allow_legacy()
+    }
+    #[cfg(not(feature = "legacy-algorithms"))]
+    {
+        SignaturePolicy::strict()
+    }
+}
 
 /// Configuration for X.509 certificate chain validation.
 pub struct CertValidationConfig<'a> {
@@ -40,8 +61,10 @@ pub fn validate_cert_chain(
     let leaf = Certificate::from_der(leaf_der)
         .map_err(|e| Error::Certificate(format!("failed to parse leaf certificate: {e}")))?;
 
+    let sig_policy = cert_signature_policy();
+
     // Build a TrustStore from the trusted certificates
-    let mut trust_store = TrustStore::new();
+    let mut trust_store = TrustStore::new().with_signature_policy(sig_policy);
     for der in config.trusted_certs {
         trust_store
             .add_der_certificate(der)
@@ -82,8 +105,12 @@ pub fn validate_cert_chain(
     let leaf_der_owned = leaf_der.to_vec();
     if trust_store.contains_der(&leaf_der_owned) {
         // Self-signed trusted cert — verify self-signature via tsp-ltv
-        tsp_ltv::crypto::verify::verify_certificate_signature(&leaf, &leaf)
-            .map_err(|e| Error::Certificate(format!("self-signature verification failed: {e}")))?;
+        tsp_ltv::crypto::verify::verify_certificate_signature_with_policy(
+            &leaf,
+            &leaf,
+            &sig_policy,
+        )
+        .map_err(|e| Error::Certificate(format!("self-signature verification failed: {e}")))?;
         // Check time validity if required
         if let Some(ref time) = validation_time {
             check_cert_time_validity(&leaf, time)?;
@@ -91,10 +118,13 @@ pub fn validate_cert_chain(
         return Ok(());
     }
 
-    // Build an ordered chain from leaf through intermediates
+    // Build an ordered chain from leaf through intermediates. The per-link
+    // signature checks honour the same policy the trust store will use, so a
+    // weak-but-valid link is not dropped before verify_chain runs.
     let anchor_subjects = trust_anchor_subjects(&trust_store);
-    let chain = build_chain_from_pool(&leaf, &pool, &anchor_subjects, None)
-        .map_err(|e| Error::Certificate(format!("cannot build certificate chain: {e}")))?;
+    let chain =
+        build_chain_from_pool_with_policy(&leaf, &pool, &anchor_subjects, None, &sig_policy)
+            .map_err(|e| Error::Certificate(format!("cannot build certificate chain: {e}")))?;
 
     // Verify the chain against the trust store
     trust_store

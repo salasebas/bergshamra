@@ -14,7 +14,10 @@ path = "src/main.rs"
 
 [features]
 default = ["legacy-algorithms"]
-legacy-algorithms = ["bergshamra-crypto/legacy-algorithms"]
+legacy-algorithms = [
+    "bergshamra-crypto/legacy-algorithms",
+    "bergshamra-dsig/legacy-algorithms",
+]
 
 [dependencies]
 bergshamra-core.workspace = true

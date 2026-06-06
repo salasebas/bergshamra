@@ -14,7 +14,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 license = "BSD-2-Clause"
 repository = "https://github.com/kushaldas/bergshamra"
@@ -47,10 +47,10 @@ digest = "0.10"
 rsa = "0.9"
 ecdsa = "0.16"
 dsa = "0.6"
-ml-dsa = { version = "=0.1.0-rc.8", features = ["pkcs8", "rand_core"] }
-slh-dsa = "0.2.0-rc.4"
+ml-dsa = { version = "0.1.1", features = ["pkcs8", "rand_core"] }
+slh-dsa = "0.2.0-rc.5"
 getrandom = { version = "0.4", features = ["sys_rng"] }
-pkcs8-pq = { package = "pkcs8", version = "=0.11.0-rc.11" }
+pkcs8-pq = { package = "pkcs8", version = "0.11.0" }
 const-oid-pq = { package = "const-oid", version = "0.10.2", features = ["db"] }
 p256 = { version = "0.13", features = ["ecdh"] }
 p384 = { version = "0.13", features = ["ecdh"] }
@@ -85,7 +85,7 @@ thiserror = "2"
 clap = { version = "4", features = ["derive"] }
 
 # Shared crypto backend
-kryptering = { path = "/home/kdas/code/kryptering", default-features = false, features = ["legacy", "post-quantum", "pkcs11"] }
+kryptering = { version = "0.3.0", default-features = false, features = ["legacy", "post-quantum", "pkcs11"] }
 
 # Shared trust/validation infrastructure
-tsp-ltv = { version = "0.1.0", default-features = false }
+tsp-ltv = { version = "0.2.0", default-features = false }

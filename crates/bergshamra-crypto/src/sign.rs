@@ -1091,7 +1091,7 @@ impl SignatureAlgorithm for PqSign {
 /// or just the 32-byte seed (from OpenSSL format, extracted by the loader).
 fn pq_ml_dsa_sign<P>(private_der: &[u8], data: &[u8], context: &[u8]) -> Result<Vec<u8>, Error>
 where
-    P: ml_dsa::MlDsaParams + ml_dsa::KeyGen,
+    P: ml_dsa::MlDsaParams,
     P: pkcs8_pq::spki::AssociatedAlgorithmIdentifier<Params = pkcs8_pq::der::AnyRef<'static>>,
 {
     // `getrandom::SysRng` is a zero-sized, stateless, fork-safe wrapper over
@@ -1113,7 +1113,7 @@ fn pq_ml_dsa_verify<P>(
     context: &[u8],
 ) -> Result<bool, Error>
 where
-    P: ml_dsa::MlDsaParams + ml_dsa::KeyGen,
+    P: ml_dsa::MlDsaParams,
     P: pkcs8_pq::spki::AssociatedAlgorithmIdentifier<Params = pkcs8_pq::der::AnyRef<'static>>,
 {
     use pkcs8_pq::spki::DecodePublicKey;
@@ -1162,7 +1162,7 @@ where
 /// Load an ML-DSA signing key from either PKCS#8 DER or a 32-byte seed.
 fn load_ml_dsa_signing_key<P>(private_der: &[u8]) -> Result<ml_dsa::ExpandedSigningKey<P>, Error>
 where
-    P: ml_dsa::MlDsaParams + ml_dsa::KeyGen,
+    P: ml_dsa::MlDsaParams,
     P: pkcs8_pq::spki::AssociatedAlgorithmIdentifier<Params = pkcs8_pq::der::AnyRef<'static>>,
 {
     // Try full PKCS#8 DER first (RustCrypto format)
