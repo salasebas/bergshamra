@@ -6,25 +6,42 @@
 
 use std::path::Path;
 
+/// Candidate SoftHSM2 PKCS#11 module locations. Kept in sync with the same
+/// list probed by `hsm-test/setup.sh` so the test and setup agree on where the
+/// module may live across distros (generic, Debian/Ubuntu multiarch, lib64,
+/// /usr/local).
+const SOFTHSM_LIB_CANDIDATES: &[&str] = &[
+    "/usr/lib/softhsm/libsofthsm2.so",
+    "/usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so",
+    "/usr/lib64/softhsm/libsofthsm2.so",
+    "/usr/local/lib/softhsm/libsofthsm2.so",
+];
+
 /// Path to the SoftHSM2 library.
 fn softhsm_lib() -> &'static str {
-    if Path::new("/usr/lib/softhsm/libsofthsm2.so").exists() {
-        "/usr/lib/softhsm/libsofthsm2.so"
-    } else if Path::new("/usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so").exists() {
-        "/usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so"
-    } else {
-        panic!("SoftHSM2 library not found")
-    }
+    SOFTHSM_LIB_CANDIDATES
+        .iter()
+        .copied()
+        .find(|p| Path::new(p).exists())
+        .unwrap_or_else(|| {
+            panic!(
+                "SoftHSM2 library not found in any known location: {}",
+                SOFTHSM_LIB_CANDIDATES.join(", ")
+            )
+        })
 }
 
 /// Set the SOFTHSM2_CONF environment variable so SoftHSM2 can find the test token.
+///
+/// Reads the gitignored config that `hsm-test/setup.sh` generates (with an
+/// absolute tokendir for this checkout), not the committed template.
 fn set_softhsm_conf() {
     let conf = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .parent()
         .unwrap()
-        .join("hsm-test/softhsm2.conf");
+        .join("hsm-test/softhsm2.local.conf");
     assert!(
         conf.exists(),
         "SoftHSM2 config not found at {conf:?} -- run `bash hsm-test/setup.sh` first"

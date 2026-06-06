@@ -78,7 +78,7 @@ hsm-setup:
 
 # Run HSM integration tests (requires hsm-setup first)
 test-hsm: build
-    SOFTHSM2_CONF={{justfile_directory()}}/hsm-test/softhsm2.conf \
+    SOFTHSM2_CONF={{justfile_directory()}}/hsm-test/softhsm2.local.conf \
         cargo test -p bergshamra-dsig --test hsm_sign_verify -- --ignored --nocapture --test-threads=1
 
 # Run all tests including HSM

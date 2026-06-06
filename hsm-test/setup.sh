@@ -2,7 +2,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-CONF="$SCRIPT_DIR/softhsm2.conf"
+# Generate a machine-specific config into a gitignored file rather than
+# overwriting the committed softhsm2.conf template. This keeps the working tree
+# clean and prevents accidentally committing an absolute, machine-specific
+# tokendir. The justfile and the integration test read this same file.
+CONF="$SCRIPT_DIR/softhsm2.local.conf"
 export SOFTHSM2_CONF="$CONF"
 TOKEN_DIR="$SCRIPT_DIR/tokens"
 
@@ -30,9 +34,9 @@ echo "Using SoftHSM2 module: $MODULE"
 
 # Generate the SoftHSM2 config so tokendir always points at this checkout's
 # token directory. SoftHSM2 does not expand environment variables in its config
-# file and needs an absolute path, so we write the resolved path here rather
-# than committing a machine-specific one. This also keeps the config in sync
-# with the TOKEN_DIR that setup.sh creates/cleans below.
+# file and needs an absolute path, so we write the resolved path into the
+# gitignored softhsm2.local.conf. This keeps the config in sync with the
+# TOKEN_DIR that setup.sh creates/cleans below.
 cat > "$CONF" <<EOF
 directories.tokendir = $TOKEN_DIR
 objectstore.backend = file
