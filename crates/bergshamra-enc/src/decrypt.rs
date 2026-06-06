@@ -271,7 +271,7 @@ fn decrypt_encrypted_key(
         // RSA key transport
         algorithm::RSA_PKCS1 | algorithm::RSA_OAEP | algorithm::RSA_OAEP_ENC11 => {
             if let Some(ref hsm_decryptor) = ctx.hsm_decryptor {
-                // Use HSM for RSA key transport decryption
+                ctx.ensure_hsm_decryptor_matches(enc_uri)?;
                 hsm_decryptor
                     .decrypt(&cipher_bytes)
                     .map_err(map_kryptering_err)
@@ -296,7 +296,7 @@ fn decrypt_encrypted_key(
         // AES Key Wrap -- select key by expected size, or derive via ECDH-ES
         algorithm::KW_AES128 | algorithm::KW_AES192 | algorithm::KW_AES256 => {
             if let Some(ref hsm_unwrapper) = ctx.hsm_key_unwrapper {
-                // Use HSM for AES key unwrapping
+                ctx.ensure_hsm_key_unwrapper_matches(enc_uri)?;
                 hsm_unwrapper
                     .unwrap(&cipher_bytes)
                     .map_err(map_kryptering_err)

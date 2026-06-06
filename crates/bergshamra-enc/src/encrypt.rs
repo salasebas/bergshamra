@@ -228,7 +228,7 @@ fn encrypt_session_key(
         let encrypted_key_bytes = match enc_uri {
             algorithm::RSA_PKCS1 | algorithm::RSA_OAEP | algorithm::RSA_OAEP_ENC11 => {
                 if let Some(ref hsm_encryptor) = ctx.hsm_encryptor {
-                    // Use HSM for RSA key transport encryption
+                    ctx.ensure_hsm_encryptor_matches(enc_uri)?;
                     hsm_encryptor
                         .encrypt(session_key)
                         .map_err(map_kryptering_err)?
@@ -250,7 +250,7 @@ fn encrypt_session_key(
             }
             algorithm::KW_AES128 | algorithm::KW_AES192 | algorithm::KW_AES256 => {
                 if let Some(ref hsm_wrapper) = ctx.hsm_key_wrapper {
-                    // Use HSM for AES key wrapping
+                    ctx.ensure_hsm_key_wrapper_matches(enc_uri)?;
                     hsm_wrapper.wrap(session_key).map_err(map_kryptering_err)?
                 } else {
                     // Software path

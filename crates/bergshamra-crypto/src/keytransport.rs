@@ -48,8 +48,8 @@ pub fn from_uri_with_params(
             } else {
                 algorithm::RSA_OAEP_ENC11
             };
-            let digest = resolve_digest(params.digest_uri.as_deref());
-            let mgf = resolve_oaep_mgf(uri, &params, digest);
+            let digest = resolve_digest(params.digest_uri.as_deref())?;
+            let mgf = resolve_oaep_mgf(uri, &params, digest)?;
             let config = OaepConfig {
                 digest,
                 mgf_digest: mgf,
@@ -66,41 +66,55 @@ pub fn from_uri_with_params(
 
 // ── URI resolution helpers ──────────────────────────────────────────
 
-/// Resolve the digest URI to a `HashAlgorithm`.
-fn resolve_digest(uri: Option<&str>) -> HashAlgorithm {
+/// Resolve the OAEP DigestMethod URI to a `HashAlgorithm`.
+///
+/// When the DigestMethod is *absent* (`None`), RSA-OAEP defaults to SHA-1 per
+/// the XML Encryption spec. But when a DigestMethod is *present yet
+/// unrecognized*, we fail closed with an error rather than silently downgrading
+/// to SHA-1 — a silent fallback would mask algorithm-downgrade attempts and
+/// produce confusing interop mismatches.
+fn resolve_digest(uri: Option<&str>) -> Result<HashAlgorithm, Error> {
     match uri {
-        Some(algorithm::SHA256) => HashAlgorithm::Sha256,
-        Some(algorithm::SHA384) => HashAlgorithm::Sha384,
-        Some(algorithm::SHA512) => HashAlgorithm::Sha512,
-        Some(algorithm::SHA224) => HashAlgorithm::Sha224,
-        Some(algorithm::SHA1) | None => HashAlgorithm::Sha1,
+        // DigestMethod absent: spec default for RSA-OAEP is SHA-1.
+        None | Some(algorithm::SHA1) => Ok(HashAlgorithm::Sha1),
+        Some(algorithm::SHA256) => Ok(HashAlgorithm::Sha256),
+        Some(algorithm::SHA384) => Ok(HashAlgorithm::Sha384),
+        Some(algorithm::SHA512) => Ok(HashAlgorithm::Sha512),
+        Some(algorithm::SHA224) => Ok(HashAlgorithm::Sha224),
         #[cfg(feature = "legacy-algorithms")]
-        Some(algorithm::RIPEMD160) => HashAlgorithm::Ripemd160,
+        Some(algorithm::RIPEMD160) => Ok(HashAlgorithm::Ripemd160),
         #[cfg(feature = "legacy-algorithms")]
-        Some(algorithm::MD5) => HashAlgorithm::Md5,
-        Some(_other) => {
+        Some(algorithm::MD5) => Ok(HashAlgorithm::Md5),
+        Some(other) => {
             #[cfg(feature = "legacy-algorithms")]
-            if _other.contains("ripemd160") {
-                return HashAlgorithm::Ripemd160;
+            {
+                if other.contains("ripemd160") {
+                    return Ok(HashAlgorithm::Ripemd160);
+                }
+                if other.contains("md5") {
+                    return Ok(HashAlgorithm::Md5);
+                }
             }
-            #[cfg(feature = "legacy-algorithms")]
-            if _other.contains("md5") {
-                return HashAlgorithm::Md5;
-            }
-            HashAlgorithm::Sha1
+            // Present-but-unsupported DigestMethod: fail closed.
+            Err(Error::UnsupportedAlgorithm(format!(
+                "unsupported OAEP DigestMethod: {other}"
+            )))
         }
     }
 }
 
 /// Resolve the MGF URI to a `HashAlgorithm`.
-fn resolve_mgf(uri: Option<&str>) -> Option<HashAlgorithm> {
+fn resolve_mgf(uri: Option<&str>) -> Result<Option<HashAlgorithm>, Error> {
     match uri {
-        Some(algorithm::MGF1_SHA1) => Some(HashAlgorithm::Sha1),
-        Some(algorithm::MGF1_SHA224) => Some(HashAlgorithm::Sha224),
-        Some(algorithm::MGF1_SHA256) => Some(HashAlgorithm::Sha256),
-        Some(algorithm::MGF1_SHA384) => Some(HashAlgorithm::Sha384),
-        Some(algorithm::MGF1_SHA512) => Some(HashAlgorithm::Sha512),
-        _ => None,
+        None => Ok(None),
+        Some(algorithm::MGF1_SHA1) => Ok(Some(HashAlgorithm::Sha1)),
+        Some(algorithm::MGF1_SHA224) => Ok(Some(HashAlgorithm::Sha224)),
+        Some(algorithm::MGF1_SHA256) => Ok(Some(HashAlgorithm::Sha256)),
+        Some(algorithm::MGF1_SHA384) => Ok(Some(HashAlgorithm::Sha384)),
+        Some(algorithm::MGF1_SHA512) => Ok(Some(HashAlgorithm::Sha512)),
+        Some(other) => Err(Error::UnsupportedAlgorithm(format!(
+            "unsupported OAEP MGF: {other}"
+        ))),
     }
 }
 
@@ -111,17 +125,21 @@ fn resolve_mgf(uri: Option<&str>) -> Option<HashAlgorithm> {
 ///
 /// For `rsa-oaep` (XML Enc 1.1): MGF defaults to the same hash as DigestMethod
 /// when no explicit MGF element is present.
-fn resolve_oaep_mgf(uri: &str, params: &OaepParams, digest: HashAlgorithm) -> HashAlgorithm {
+fn resolve_oaep_mgf(
+    uri: &str,
+    params: &OaepParams,
+    digest: HashAlgorithm,
+) -> Result<HashAlgorithm, Error> {
     // If an explicit MGF element is present, use it
-    if let Some(mgf) = resolve_mgf(params.mgf_uri.as_deref()) {
-        return mgf;
+    if let Some(mgf) = resolve_mgf(params.mgf_uri.as_deref())? {
+        return Ok(mgf);
     }
     // rsa-oaep-mgf1p: MGF1 defaults to SHA-1
     if uri == algorithm::RSA_OAEP {
-        return HashAlgorithm::Sha1;
+        return Ok(HashAlgorithm::Sha1);
     }
     // rsa-oaep (enc11): MGF defaults to same as digest
-    digest
+    Ok(digest)
 }
 
 // ── Wrapper that delegates to kryptering ────────────────────────────
@@ -154,5 +172,39 @@ impl KeyTransportAlgorithm for KrypteringKeyTransport {
             self.label.as_deref(),
         )
         .map_err(crate::map_kryptering_err)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{from_uri_with_params, resolve_digest, resolve_mgf, OaepParams};
+    use bergshamra_core::algorithm;
+    use kryptering::algorithm::HashAlgorithm;
+
+    #[test]
+    fn resolve_digest_defaults_only_when_absent() {
+        assert_eq!(resolve_digest(None).unwrap(), HashAlgorithm::Sha1);
+        assert!(resolve_digest(Some("urn:test:unsupported-digest")).is_err());
+    }
+
+    #[test]
+    fn resolve_mgf_rejects_unknown_uri() {
+        assert_eq!(resolve_mgf(None).unwrap(), None);
+        assert_eq!(
+            resolve_mgf(Some(algorithm::MGF1_SHA256)).unwrap(),
+            Some(HashAlgorithm::Sha256)
+        );
+        assert!(resolve_mgf(Some("urn:test:unsupported-mgf")).is_err());
+    }
+
+    #[test]
+    fn from_uri_with_params_rejects_unknown_oaep_mgf() {
+        let params = OaepParams {
+            digest_uri: Some(algorithm::SHA256.to_owned()),
+            mgf_uri: Some("urn:test:unsupported-mgf".to_owned()),
+            oaep_params: None,
+        };
+
+        assert!(from_uri_with_params(algorithm::RSA_OAEP_ENC11, params).is_err());
     }
 }
