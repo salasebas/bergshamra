@@ -411,6 +411,8 @@ def build_bergshamra_cmd(ctx):
             cmd.append("--verify-keys")
         if ctx["verification_gmt_time"]:
             cmd.extend(["--verification-gmt-time", ctx["verification_gmt_time"]])
+        if ctx["x509_skip_strict"]:
+            cmd.append("--x509-skip-strict-checks")
         if ctx["x509_skip_time_checks"]:
             cmd.append("--x509-skip-time-checks")
         if ctx["enabled_key_data"]:
