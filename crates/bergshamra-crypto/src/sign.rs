@@ -348,6 +348,64 @@ fn hash_to_kryptering(h: HashType) -> kryptering::HashAlgorithm {
     }
 }
 
+/// The canonical XML-DSig `SignatureMethod` URI for a [`kryptering::SignatureAlgorithm`].
+///
+/// Returns `None` for algorithm/hash combinations that have no W3C/xmlsec URI
+/// (e.g. RSA-PKCS#1 with a SHA-3 hash). Used to cross-check an HSM signer's or
+/// verifier's declared algorithm against the `<SignatureMethod>` URI in the XML
+/// template, so a signed document can never claim an algorithm different from
+/// the one actually used.
+pub fn kryptering_algorithm_uri(alg: kryptering::SignatureAlgorithm) -> Option<&'static str> {
+    use kryptering::HashAlgorithm as H;
+    use kryptering::SignatureAlgorithm as S;
+    let uri = match alg {
+        S::RsaPkcs1v15(H::Sha1) => algorithm::RSA_SHA1,
+        S::RsaPkcs1v15(H::Sha224) => algorithm::RSA_SHA224,
+        S::RsaPkcs1v15(H::Sha256) => algorithm::RSA_SHA256,
+        S::RsaPkcs1v15(H::Sha384) => algorithm::RSA_SHA384,
+        S::RsaPkcs1v15(H::Sha512) => algorithm::RSA_SHA512,
+        S::RsaPss(H::Sha1) => algorithm::RSA_PSS_SHA1,
+        S::RsaPss(H::Sha224) => algorithm::RSA_PSS_SHA224,
+        S::RsaPss(H::Sha256) => algorithm::RSA_PSS_SHA256,
+        S::RsaPss(H::Sha384) => algorithm::RSA_PSS_SHA384,
+        S::RsaPss(H::Sha512) => algorithm::RSA_PSS_SHA512,
+        S::RsaPss(H::Sha3_224) => algorithm::RSA_PSS_SHA3_224,
+        S::RsaPss(H::Sha3_256) => algorithm::RSA_PSS_SHA3_256,
+        S::RsaPss(H::Sha3_384) => algorithm::RSA_PSS_SHA3_384,
+        S::RsaPss(H::Sha3_512) => algorithm::RSA_PSS_SHA3_512,
+        S::Ecdsa(_, H::Sha1) => algorithm::ECDSA_SHA1,
+        S::Ecdsa(_, H::Sha224) => algorithm::ECDSA_SHA224,
+        S::Ecdsa(_, H::Sha256) => algorithm::ECDSA_SHA256,
+        S::Ecdsa(_, H::Sha384) => algorithm::ECDSA_SHA384,
+        S::Ecdsa(_, H::Sha512) => algorithm::ECDSA_SHA512,
+        S::Ecdsa(_, H::Sha3_224) => algorithm::ECDSA_SHA3_224,
+        S::Ecdsa(_, H::Sha3_256) => algorithm::ECDSA_SHA3_256,
+        S::Ecdsa(_, H::Sha3_384) => algorithm::ECDSA_SHA3_384,
+        S::Ecdsa(_, H::Sha3_512) => algorithm::ECDSA_SHA3_512,
+        S::Ed25519 => algorithm::EDDSA_ED25519,
+        S::Hmac(H::Sha1) => algorithm::HMAC_SHA1,
+        S::Hmac(H::Sha224) => algorithm::HMAC_SHA224,
+        S::Hmac(H::Sha256) => algorithm::HMAC_SHA256,
+        S::Hmac(H::Sha384) => algorithm::HMAC_SHA384,
+        S::Hmac(H::Sha512) => algorithm::HMAC_SHA512,
+        #[cfg(feature = "legacy-algorithms")]
+        S::Dsa(H::Sha1) => algorithm::DSA_SHA1,
+        #[cfg(feature = "legacy-algorithms")]
+        S::Dsa(H::Sha256) => algorithm::DSA_SHA256,
+        S::MlDsa(kryptering::MlDsaVariant::MlDsa44) => algorithm::ML_DSA_44,
+        S::MlDsa(kryptering::MlDsaVariant::MlDsa65) => algorithm::ML_DSA_65,
+        S::MlDsa(kryptering::MlDsaVariant::MlDsa87) => algorithm::ML_DSA_87,
+        S::SlhDsa(kryptering::SlhDsaVariant::Sha2_128f) => algorithm::SLH_DSA_SHA2_128F,
+        S::SlhDsa(kryptering::SlhDsaVariant::Sha2_128s) => algorithm::SLH_DSA_SHA2_128S,
+        S::SlhDsa(kryptering::SlhDsaVariant::Sha2_192f) => algorithm::SLH_DSA_SHA2_192F,
+        S::SlhDsa(kryptering::SlhDsaVariant::Sha2_192s) => algorithm::SLH_DSA_SHA2_192S,
+        S::SlhDsa(kryptering::SlhDsaVariant::Sha2_256f) => algorithm::SLH_DSA_SHA2_256F,
+        S::SlhDsa(kryptering::SlhDsaVariant::Sha2_256s) => algorithm::SLH_DSA_SHA2_256S,
+        _ => return None,
+    };
+    Some(uri)
+}
+
 // ── RSA PKCS#1 v1.5 ─────────────────────────────────────────────────
 
 struct RsaPkcs1v15 {

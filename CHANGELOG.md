@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.5.0
+
+### Breaking Changes
+
+#### `DsigContext::new()` is now secure-by-default
+
+`DsigContext::new()` now enables `trusted_keys_only = true`,
+`strict_verification = true`, and `hmac_min_out_len = 160` out of the box,
+hardened for federated identity (SAML, WS-Security). Callers that need the
+previous permissive W3C XML-DSig behavior — inline `<KeyInfo>` keys, no
+reference-position enforcement, no minimum HMAC output length — must switch to
+the new `DsigContext::new_permissive()`.
+
+#### `VerifiedReference` is now `#[non_exhaustive]` and gained `digest_verified`
+
+The public `VerifiedReference` struct has a new `digest_verified: bool` field
+(`false` for `cid:` WS-Security attachment references whose content lives
+outside the XML document). The struct is now `#[non_exhaustive]`, so downstream
+code must construct it via the verifier and match it with `..`; future fields
+will no longer be a breaking change.
+
+### Added
+
+- `DsigContext::new_permissive()` — opt-in W3C-standard (permissive) context.
+- Verifier-declared HMAC truncation (`HMACOutputLength`, W3C XML-DSig §6.3.1)
+  via `SignatureAlgorithm::verify_truncated`, gated by the CVE-2009-0217 policy
+  floor (`hmac_min_out_len`).
+
+### Changed
+
+- Updated `ml-dsa` to `0.1.1`, `slh-dsa` to `0.2.0-rc.5`, and the post-quantum
+  `pkcs8` to the stable `0.11.0` (previously prerelease pins), tracking
+  `kryptering 0.3`.
+- `kryptering` (>=0.3) and `tsp-ltv` (>=0.2) are now resolved from crates.io
+  instead of local `path` / `[patch]` dependencies.
+- ML-DSA signing is now randomized (`sign_randomized`); RSA-PSS and ML-DSA
+  draw from the OS CSPRNG (`OsRng` / `getrandom::SysRng`), and OS RNG failures
+  surface as errors instead of panicking. See `docs/adr/0003-rng-choice.md`.
+- `DsigContext` / `EncContext` `Debug` impls now redact the `KeysManager`
+  (printing only a key count) to avoid leaking private/secret key material into
+  logs and crash reports.
+
+### Fixed
+
+- XML-Enc: `<DerivedKey>` (ConcatKDF / PBKDF2) derivation failures now surface
+  as errors instead of silently falling through to a `KeyName` lookup that used
+  the wrong key bytes (which produced misleading downstream errors).
+
 ## 0.4.0
 
 ### Breaking Changes

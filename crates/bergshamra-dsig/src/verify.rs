@@ -20,7 +20,12 @@ use std::collections::HashMap;
 use uppsala::{Document, NodeId, NodeKind, XmlWriter};
 
 /// Metadata about a single verified `<Reference>`.
+///
+/// Marked `#[non_exhaustive]`: construct it via the verifier rather than a
+/// struct literal, and match with `..`. This lets future fields be added
+/// without a breaking change for downstream code.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct VerifiedReference {
     /// The URI attribute from the `<Reference>` element.
     pub uri: String,
@@ -262,6 +267,24 @@ pub fn verify(ctx: &DsigContext, xml: &str) -> Result<VerifyResult, Error> {
 
     // HSM verifier path — key material stays on the HSM.
     if let Some(ref hsm_verifier) = ctx.hsm_verifier {
+        // Cross-check the verifier's algorithm against the XML <SignatureMethod>
+        // URI. The HSM verifier always verifies with its own configured
+        // algorithm; if that disagrees with what the document declares, a naive
+        // pass would report `Valid` for a signature over an algorithm the XML
+        // never claimed (or silently accept an algorithm-confusion attempt).
+        // Treat a mismatch as an invalid signature rather than a hard error so
+        // callers get a normal verification verdict.
+        let verifier_uri =
+            bergshamra_crypto::sign::kryptering_algorithm_uri(hsm_verifier.algorithm());
+        if verifier_uri != Some(sig_method_uri) {
+            return Ok(VerifyResult::Invalid {
+                reason: format!(
+                    "SignatureMethod {sig_method_uri} does not match HSM verifier algorithm {:?} (URI {})",
+                    hsm_verifier.algorithm(),
+                    verifier_uri.unwrap_or("<unmapped>"),
+                ),
+            });
+        }
         let valid = hsm_verifier
             .verify(&c14n_signed_info, &sig_value)
             .map_err(crate::map_kryptering_err)?;

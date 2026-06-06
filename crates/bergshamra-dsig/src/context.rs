@@ -47,8 +47,14 @@ pub struct DsigContext {
 
 impl std::fmt::Debug for DsigContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Never format `keys_manager` directly: `KeysManager`/`Key` derive
+        // `Debug`, which would print private RSA/EC key material and raw
+        // HMAC/AES bytes into logs and crash reports. Redact to a key count.
         f.debug_struct("DsigContext")
-            .field("keys_manager", &self.keys_manager)
+            .field(
+                "keys_manager",
+                &format_args!("<{} key(s), redacted>", self.keys_manager.len()),
+            )
             .field("id_attrs", &self.id_attrs)
             .field("url_maps", &self.url_maps)
             .field("hmac_min_out_len", &self.hmac_min_out_len)

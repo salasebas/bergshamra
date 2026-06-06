@@ -217,7 +217,19 @@ pub fn sign(ctx: &DsigContext, template_xml: &str) -> Result<String, Error> {
     let signature = if let Some(ref hsm_signer) = ctx.hsm_signer {
         // HSM signer path — key material stays on the HSM.
         // The HSM signer already knows its algorithm, so we skip PQ context
-        // extraction and software key lookup.
+        // extraction and software key lookup. But we MUST cross-check that the
+        // signer's algorithm matches the template's <SignatureMethod> URI:
+        // otherwise the emitted document would declare one algorithm while the
+        // SignatureValue was produced with another, making it self-inconsistent
+        // and likely to fail interop verification.
+        let signer_uri = bergshamra_crypto::sign::kryptering_algorithm_uri(hsm_signer.algorithm());
+        if signer_uri != Some(sig_method_uri) {
+            return Err(Error::UnsupportedAlgorithm(format!(
+                "HSM signer algorithm {:?} (URI {}) does not match the template's SignatureMethod {sig_method_uri}",
+                hsm_signer.algorithm(),
+                signer_uri.unwrap_or("<unmapped>"),
+            )));
+        }
         hsm_signer
             .sign(&c14n_signed_info)
             .map_err(crate::map_kryptering_err)?

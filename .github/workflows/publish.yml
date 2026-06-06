@@ -11,18 +11,14 @@ env:
 
 # Note on crates.io publishing
 # -----------------------------
-# Bergshamra's workspace Cargo.toml pins kryptering as an absolute path
-# dependency:
-#     kryptering = { path = "/home/kdas/code/kryptering", ... }
-# `cargo publish` rejects any member crate whose transitive dependency graph
-# includes a `path`-only dep without a `version` fallback — so the four
-# bergshamra crates that reach kryptering (bergshamra-crypto, bergshamra-dsig,
-# bergshamra-enc, bergshamra-keys) cannot be pushed to crates.io from this
-# workflow as-is. Until kryptering is published and the workspace switches
-# to `{ path = "…", version = "0.2" }` form, this workflow only cuts a
-# GitHub Release. Re-introduce a `publish-crate` job (see
-# kryptering/.github/workflows/publish.yml for the shape) once the
-# kryptering dep is crates.io-resolvable.
+# The workspace now resolves all dependencies from crates.io — including
+# kryptering (>=0.3) and tsp-ltv (>=0.2), which were previously local `path`
+# deps that blocked `cargo publish`. The crates are therefore crates.io-
+# publishable, but this workflow currently only cuts a GitHub Release. To push
+# the member crates to crates.io, add a `publish-crate` job that runs
+# `cargo publish` for each crate in dependency order (core → xml → c14n →
+# crypto → keys → transforms → dsig/enc → bergshamra); see
+# kryptering/.github/workflows/publish.yml for the shape.
 
 jobs:
   # Sanity: the workspace must compile & test from a fresh checkout of the
