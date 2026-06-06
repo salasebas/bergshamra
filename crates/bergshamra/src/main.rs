@@ -95,6 +95,10 @@ enum Commands {
         #[arg(long = "x509-skip-time-checks")]
         x509_skip_time_checks: bool,
 
+        /// Skip automatic inline X.509 trust-anchor validation for xmlsec compatibility.
+        #[arg(long = "x509-skip-strict-checks")]
+        x509_skip_strict_checks: bool,
+
         /// Specify enabled key data types (e.g., x509, key-value, key-name)
         #[arg(long = "enabled-key-data")]
         enabled_key_data: Option<String>,
@@ -312,6 +316,7 @@ fn main() {
             verify_keys,
             verification_gmt_time,
             x509_skip_time_checks,
+            x509_skip_strict_checks,
             enabled_key_data,
             strict,
             trusted_keys_only,
@@ -336,6 +341,7 @@ fn main() {
             verify_keys,
             verification_gmt_time,
             x509_skip_time_checks,
+            x509_skip_strict_checks,
             enabled_key_data,
             strict,
             trusted_keys_only,
@@ -453,6 +459,7 @@ fn cmd_verify(
     verify_keys: bool,
     verification_gmt_time: Option<String>,
     x509_skip_time_checks: bool,
+    x509_skip_strict_checks: bool,
     enabled_key_data: Option<String>,
     strict: bool,
     trusted_keys_only: bool,
@@ -524,6 +531,9 @@ fn cmd_verify(
         .as_deref()
         .map(|s| s.split(',').any(|part| part.trim() == "x509"))
         .unwrap_or(false);
+    if !trusted.is_empty() && !x509_skip_strict_checks {
+        ctx.enabled_key_data_x509 = true;
+    }
     ctx.strict_verification = strict;
     ctx.trusted_keys_only = trusted_keys_only;
 
@@ -1046,4 +1056,37 @@ fn build_keys_manager(
     }
 
     Ok(mgr)
+}
+
+#[cfg(test)]
+mod tests {
+    fn should_validate_inline_x509(
+        has_trusted: bool,
+        x509_skip_strict_checks: bool,
+        enabled_key_data: Option<&str>,
+    ) -> bool {
+        let enabled_key_data_x509 = enabled_key_data
+            .map(|s| s.split(',').any(|part| part.trim() == "x509"))
+            .unwrap_or(false);
+        enabled_key_data_x509 || (has_trusted && !x509_skip_strict_checks)
+    }
+
+    #[test]
+    fn trusted_roots_enable_inline_x509_validation_by_default() {
+        assert!(should_validate_inline_x509(true, false, None));
+    }
+
+    #[test]
+    fn skip_strict_checks_preserves_xmlsec_compat_mode() {
+        assert!(!should_validate_inline_x509(true, true, None));
+    }
+
+    #[test]
+    fn explicit_enabled_key_data_x509_still_wins() {
+        assert!(should_validate_inline_x509(
+            false,
+            true,
+            Some("key-name,x509")
+        ));
+    }
 }
