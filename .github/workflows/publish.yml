@@ -11,14 +11,13 @@ env:
 
 # Note on crates.io publishing
 # -----------------------------
-# The workspace now resolves all dependencies from crates.io — including
+# The workspace resolves all dependencies from crates.io — including
 # kryptering (>=0.3) and tsp-ltv (>=0.2), which were previously local `path`
-# deps that blocked `cargo publish`. The crates are therefore crates.io-
-# publishable, but this workflow currently only cuts a GitHub Release. To push
-# the member crates to crates.io, add a `publish-crate` job that runs
-# `cargo publish` for each crate in dependency order (core → xml → c14n →
-# crypto → keys → transforms → dsig/enc → bergshamra); see
-# kryptering/.github/workflows/publish.yml for the shape.
+# deps that blocked `cargo publish`. A single `cargo publish` from the virtual
+# workspace root packages and uploads every member crate in the correct
+# dependency order (core → xml → c14n → crypto → pkcs12 → keys → transforms →
+# dsig/enc → bergshamra), so no per-crate publish loop is needed. The job
+# chain is: verify → publish-crate → release.
 
 jobs:
   # Sanity: the workspace must compile & test from a fresh checkout of the
@@ -27,10 +26,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
@@ -59,14 +58,69 @@ jobs:
       - name: Test workspace
         run: cargo test --locked --workspace --all-features --lib
 
-  release:
+  # Publish to crates.io via OIDC trusted publishing. No long-lived
+  # CARGO_REGISTRY_TOKEN secret is needed — `crates-io-auth-action`
+  # exchanges the GitHub OIDC token for a short-lived crates.io token
+  # gated by the trusted-publishing config on https://crates.io/me.
+  publish-crate:
+    name: Publish to crates.io
     needs: verify
     runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Authenticate with crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@bbd81622f20ce9e2dd9622e3218b975523e45bbe # v1
+
+      # Skip the tag-vs-Cargo.toml verification for manual dispatch
+      # (no tag context). On a real tag push, refuse to publish if the
+      # tag and Cargo.toml version don't match.
+      - name: Verify tag matches crate version
+        if: github.event_name == 'push'
+        run: |
+          version=$(grep -m 1 '^version' Cargo.toml | sed -E 's/version *= *"(.+)"/\1/')
+          if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match Cargo.toml version v${version}"
+            exit 1
+          fi
+
+      # `--dry-run` always; real `publish` only on tag push so manual
+      # workflow runs can sanity-check the workflow without uploading.
+      - name: Verify publishable package
+        run: cargo publish --dry-run
+
+      - name: Publish to crates.io
+        if: github.event_name == 'push'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish
+
+  # GitHub Release with auto-generated notes — only after a successful
+  # crates.io publish, and only on a real tag push.
+  release:
+    needs: publish-crate
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
     permissions:
       contents: write
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           generate_release_notes: true
