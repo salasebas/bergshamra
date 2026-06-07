@@ -143,7 +143,7 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "bergshamra"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "base64",
  "bergshamra-c14n",
@@ -161,7 +161,7 @@ dependencies = [
 
 [[package]]
 name = "bergshamra-c14n"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "bergshamra-core",
  "bergshamra-xml",
@@ -170,14 +170,14 @@ dependencies = [
 
 [[package]]
 name = "bergshamra-core"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "bergshamra-crypto"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -218,7 +218,7 @@ dependencies = [
 
 [[package]]
 name = "bergshamra-dsig"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "base64",
  "bergshamra-c14n",
@@ -241,7 +241,7 @@ dependencies = [
 
 [[package]]
 name = "bergshamra-enc"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "base64",
  "bergshamra-c14n",
@@ -260,7 +260,7 @@ dependencies = [
 
 [[package]]
 name = "bergshamra-keys"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "base64",
  "bergshamra-core",
@@ -299,7 +299,7 @@ dependencies = [
 
 [[package]]
 name = "bergshamra-pkcs12"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "aes",
  "bergshamra-core",
@@ -315,7 +315,7 @@ dependencies = [
 
 [[package]]
 name = "bergshamra-transforms"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "base64",
  "bergshamra-c14n",
@@ -328,7 +328,7 @@ dependencies = [
 
 [[package]]
 name = "bergshamra-xml"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "bergshamra-core",
  "uppsala",
@@ -1902,9 +1902,9 @@ dependencies = [
 
 [[package]]
 name = "uppsala"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1600dc6ec465bbba4056042fc73041b82081849ab3117f5d2e233eb96e3e1725"
+checksum = "9d87ccb81b1e9ddc119871ecbd40a5e93f173f0777838db1e8c0dec223ae3c49"
 
 [[package]]
 name = "utf8parse"

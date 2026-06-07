@@ -14,7 +14,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 license = "BSD-2-Clause"
 repository = "https://github.com/kushaldas/bergshamra"
@@ -34,7 +34,7 @@ bergshamra-enc = { version = "0.5.0", path = "crates/bergshamra-enc" }
 bergshamra-pkcs12 = { version = "0.5.0", path = "crates/bergshamra-pkcs12" }
 
 # XML parsing
-uppsala = "0.3.0"
+uppsala = "0.4.0"
 
 # Cryptography (RustCrypto ecosystem)
 sha1 = { version = "0.10", features = ["oid"] }

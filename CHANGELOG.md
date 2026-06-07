@@ -1,5 +1,12 @@
 # Changelog
 
+
+## 0.5.1
+
+### Changed
+
+- Updates `uppsala` to latest 0.4.0 version.
+
 ## 0.5.0
 
 ### Breaking Changes
